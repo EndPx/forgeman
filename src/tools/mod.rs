@@ -160,8 +160,11 @@ mod tests {
         assert!(safe_path(root, "src/main.rs").is_ok());
         assert!(safe_path(root, "../outside.txt").is_err());
         assert!(safe_path(root, "a/../../b").is_err());
-        assert!(safe_path(root, "C:/windows/system32").is_err());
         assert!(safe_path(root, "/etc/passwd").is_err());
+        // Windows drive-letter paths carry a Prefix component. On Unix the
+        // same string is just a weird relative directory name.
+        #[cfg(windows)]
+        assert!(safe_path(root, "C:/windows/system32").is_err());
     }
 
     #[test]

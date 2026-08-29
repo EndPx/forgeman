@@ -402,16 +402,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stage_publishes_summary_for_real_command() {
-        // A repo whose "test command" is a real, always-passing command:
-        // use cargo on this very crate? Too slow. Use a controlled fake via
-        // cmd on windows / true-ish on unix is non-portable — instead craft
-        // a package.json whose npm-test we can't run portably. We assert the
-        // failure path with a missing program instead.
+    async fn test_stage_publishes_failure_for_broken_suite() {
+        // Portable end-to-end: cargo is guaranteed in Rust CI environments.
+        // The tempdir crate has a manifest but no src/ target, so `cargo
+        // test` exits non-zero with unparseable output — TestStage must
+        // count that as one failure (fallback) instead of claiming success.
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
-            tmp.path().join("package.json"),
-            r#"{ "name": "x", "scripts": { "test": "does-not-exist-xyz" } }"#,
+            tmp.path().join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
 
@@ -425,10 +424,17 @@ mod tests {
         let mut ctx = RunContext::new(crate::config::Config::default(), task, run);
         let stage = TestStage;
 
-        let result = stage.execute(&mut ctx).await;
+        let output = stage.execute(&mut ctx).await.expect("stage completes");
+        let tests: TestSummary = output
+            .artifacts
+            .iter()
+            .find(|(key, _)| key == "tests.result")
+            .and_then(|(_, value)| serde_json::from_value(value.clone()).ok())
+            .expect("tests.result artifact published");
         assert!(
-            result.is_err(),
-            "missing program must surface as stage failure"
+            tests.failed >= 1,
+            "non-zero exit without counts must count as failure"
         );
+        assert!(!tests.all_passed());
     }
 }
