@@ -49,8 +49,15 @@ pub struct ExecutionConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct SandboxConfig {
     pub enabled: bool,
-    /// `restricted` | `open` (Docker-backed sandbox arrives in Phase 10).
+    /// `restricted` (no network) | `open` (bridge network in Docker).
     pub network: String,
+    /// Container image override. Defaults are chosen per ecosystem
+    /// (rust:1, node:22-alpine, python:3.12-slim).
+    pub image: Option<String>,
+    /// Docker memory limit (e.g. "1g").
+    pub memory: String,
+    /// Docker CPU limit.
+    pub cpus: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,6 +108,9 @@ impl Default for SandboxConfig {
         Self {
             enabled: false,
             network: "restricted".to_string(),
+            image: None,
+            memory: "1g".to_string(),
+            cpus: 1.0,
         }
     }
 }

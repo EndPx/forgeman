@@ -6,6 +6,7 @@ mod env;
 mod git;
 mod providers;
 mod repository;
+mod sandbox;
 mod tools;
 
 use anyhow::{Context, Result};
@@ -465,9 +466,16 @@ fn cmd_test(repo_root: &Path) -> Result<()> {
     let mut failed = false;
     for command in &commands {
         println!("▶ {} …", command.name);
+        let prepared = sandbox::prepare(
+            repo_root,
+            command,
+            &Config::load(None, repo_root)?.sandbox,
+            sandbox::detect_docker(),
+        )
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
         let (ok, output, _code, duration_ms) =
-            agents::test_runner::run_command(repo_root, command, timeout)
-                .map_err(|err| anyhow::anyhow!("{command:?}: {err}"))?;
+            agents::test_runner::run_prepared(prepared, &command.name, timeout)
+                .map_err(|err| anyhow::anyhow!("{err}"))?;
         let summary = agents::test_runner::parse_summary(&command.name, &output, duration_ms);
         let mark = if ok { "✓" } else { "✗" };
         println!(

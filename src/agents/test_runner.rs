@@ -94,22 +94,34 @@ fn python_test_available() -> bool {
 
 /// Run one command inside the repository, capturing combined output.
 /// Times out after `timeout` so a hung suite cannot block the loop.
+/// Runs under the `Process` sandbox (no Docker), kept for direct callers.
+#[allow(dead_code)]
 pub fn run_command(
     repo_root: &Path,
     command: &TestCommand,
+    timeout: Duration,
+) -> Result<(bool, String, i32, u64), String> {
+    let mut cmd = Command::new(&command.program);
+    cmd.args(&command.args).current_dir(repo_root);
+    run_prepared(cmd, &command.name, timeout)
+}
+
+/// Run an already-prepared command (e.g. sandbox-wrapped) with output
+/// capture and timeout.
+pub fn run_prepared(
+    mut cmd: Command,
+    name: &str,
     timeout: Duration,
 ) -> Result<(bool, String, i32, u64), String> {
     use std::io::Read;
     use std::sync::mpsc;
 
     let started = Instant::now();
-    let mut child = Command::new(&command.program)
-        .args(&command.args)
-        .current_dir(repo_root)
+    let mut child = cmd
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|err| format!("cannot spawn {}: {err}", command.program))?;
+        .map_err(|err| format!("cannot spawn {name}: {err}"))?;
 
     // Reader threads accumulate piped output while we poll for exit so a
     // chatty suite cannot deadlock on a full pipe.
@@ -137,14 +149,13 @@ pub fn run_command(
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(format!(
-                        "command {} timed out after {}s",
-                        command.name,
+                        "command {name} timed out after {}s",
                         timeout.as_secs()
                     ));
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(err) => return Err(format!("command {} failed: {err}", command.name)),
+            Err(err) => return Err(format!("command {name} failed: {err}")),
         }
     };
 
@@ -283,8 +294,15 @@ impl Stage for TestStage {
             let mut any_failure = false;
 
             for command in &commands {
+                let prepared = crate::sandbox::prepare(
+                    &ctx.task.repo_root,
+                    command,
+                    &ctx.config.sandbox,
+                    crate::sandbox::detect_docker(),
+                )
+                .map_err(|err| StageError::failed(StageName::Test, err))?;
                 let (ok, output, code, duration_ms) =
-                    run_command(&ctx.task.repo_root, command, timeout)
+                    run_prepared(prepared, &command.name, timeout)
                         .map_err(|err| StageError::failed(StageName::Test, err))?;
                 let parsed = parse_summary(&command.name, &output, duration_ms);
                 all_output.push_str(&output);
