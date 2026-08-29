@@ -8,7 +8,7 @@ pub const CONFIG_RELATIVE_PATH: &str = ".forgeman/config.toml";
 
 /// Default configuration per the ForgeMan specification:
 /// max 5 iterations, 20 minute timeout, $5 budget.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub project: ProjectConfig,
@@ -64,46 +64,49 @@ pub struct BudgetConfig {
     pub max_cost_usd: f64,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            project: ProjectConfig::default(),
-            agent: AgentConfig::default(),
-            execution: ExecutionConfig::default(),
-            sandbox: SandboxConfig::default(),
-            evaluation: EvaluationConfig::default(),
-            budget: BudgetConfig::default(),
-        }
-    }
-}
-
 impl Default for ProjectConfig {
     fn default() -> Self {
-        Self { name: "unnamed".to_string() }
+        Self {
+            name: "unnamed".to_string(),
+        }
     }
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
-        Self { provider: "anthropic".to_string(), model: "claude".to_string() }
+        Self {
+            provider: "anthropic".to_string(),
+            model: "claude".to_string(),
+        }
     }
 }
 
 impl Default for ExecutionConfig {
     fn default() -> Self {
-        Self { max_iterations: 5, timeout_minutes: 20, max_stage_attempts: 3 }
+        Self {
+            max_iterations: 5,
+            timeout_minutes: 20,
+            max_stage_attempts: 3,
+        }
     }
 }
 
 impl Default for SandboxConfig {
     fn default() -> Self {
-        Self { enabled: false, network: "restricted".to_string() }
+        Self {
+            enabled: false,
+            network: "restricted".to_string(),
+        }
     }
 }
 
 impl Default for EvaluationConfig {
     fn default() -> Self {
-        Self { tests: true, performance: false, security: false }
+        Self {
+            tests: true,
+            performance: false,
+            security: false,
+        }
     }
 }
 
@@ -130,9 +133,8 @@ impl Config {
             return Ok(Self::default());
         }
 
-        let raw = std::fs::read_to_string(&path).with_context(|| {
-            format!("failed to read config file {}", path.display())
-        })?;
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read config file {}", path.display()))?;
         let config: Self = toml::from_str(&raw)
             .with_context(|| format!("invalid config file {}", path.display()))?;
         config.validate()?;
@@ -150,13 +152,11 @@ impl Config {
             );
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!("failed to create {}", parent.display())
-            })?;
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create {}", parent.display()))?;
         }
-        std::fs::write(&path, render_default_toml()).with_context(|| {
-            format!("failed to write {}", path.display())
-        })?;
+        std::fs::write(&path, render_default_toml())
+            .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(path)
     }
 

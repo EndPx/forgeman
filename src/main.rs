@@ -8,7 +8,7 @@ use clap::Parser;
 use cli::{Cli, Command};
 use config::Config;
 use core::events::{ConsoleSink, JsonlSink, MultiSink};
-use core::model::{new_task_id, Run, RunStatus, Task};
+use core::model::{Run, RunStatus, Task, new_task_id};
 use core::orchestrator::{Orchestrator, StageRegistry};
 use core::store::RunStore;
 use std::path::Path;
@@ -23,7 +23,12 @@ async fn main() {
 }
 
 async fn dispatch(cli: Cli) -> Result<()> {
-    let Cli { config: config_path, repo, verbose: _, command } = cli;
+    let Cli {
+        config: config_path,
+        repo,
+        verbose: _,
+        command,
+    } = cli;
     let repo_root = match repo {
         Some(path) => path,
         None => std::env::current_dir().expect("current directory is readable"),
@@ -38,11 +43,33 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::Inspect => pending("inspect", 2, "repository inspector"),
         Command::Analyze { .. } => pending("analyze", 4, "task analyzer"),
         Command::Plan { .. } => pending("plan", 4, "planner"),
-        Command::Run { task, max_iterations, timeout_minutes } => {
-            cmd_run(config_path.as_deref(), &repo_root, task, max_iterations, timeout_minutes).await
+        Command::Run {
+            task,
+            max_iterations,
+            timeout_minutes,
+        } => {
+            cmd_run(
+                config_path.as_deref(),
+                &repo_root,
+                task,
+                max_iterations,
+                timeout_minutes,
+            )
+            .await
         }
-        Command::Solve { task, max_iterations, timeout_minutes } => {
-            cmd_run(config_path.as_deref(), &repo_root, task, max_iterations, timeout_minutes).await
+        Command::Solve {
+            task,
+            max_iterations,
+            timeout_minutes,
+        } => {
+            cmd_run(
+                config_path.as_deref(),
+                &repo_root,
+                task,
+                max_iterations,
+                timeout_minutes,
+            )
+            .await
         }
         Command::Test => pending("test", 6, "test runner"),
         Command::Improve { .. } => pending("improve", 8, "iteration engine"),
@@ -58,8 +85,7 @@ async fn cmd_run(
     max_iterations: Option<u32>,
     timeout_minutes: Option<u64>,
 ) {
-    let mut config = Config::load(config_path, repo_root)
-        .expect("configuration is valid");
+    let mut config = Config::load(config_path, repo_root).expect("configuration is valid");
     if let Some(max) = max_iterations {
         config.execution.max_iterations = max;
     }
@@ -115,7 +141,11 @@ fn print_run_summary(run: &Run, store: &RunStore) {
     println!("RUN          {}", run.id);
     println!("STATUS       {}", run.status);
     println!("ITERATIONS   {}", run.iterations.len());
-    let preamble: Vec<&str> = run.preamble_results.iter().map(|r| r.stage.as_str()).collect();
+    let preamble: Vec<&str> = run
+        .preamble_results
+        .iter()
+        .map(|r| r.stage.as_str())
+        .collect();
     if !preamble.is_empty() {
         println!("STAGES DONE  {}", preamble.join(", "));
     }
@@ -124,10 +154,7 @@ fn print_run_summary(run: &Run, store: &RunStore) {
         println!("FAILURES     {failures}");
     }
     println!("DURATION     {}s", run.duration_secs());
-    println!(
-        "EVIDENCE     {}",
-        store.events_path(&run.id).display()
-    );
+    println!("EVIDENCE     {}", store.events_path(&run.id).display());
     println!();
 }
 
@@ -147,7 +174,10 @@ fn cmd_report(repo_root: &Path, run_id: Option<String>) -> Result<()> {
     println!("Run          {}", run.id);
     println!("Task         {}", run.task.description);
     println!("Repository   {}", run.task.repo_root.display());
-    println!("Started      {}", run.started_at.format("%Y-%m-%d %H:%M:%S UTC"));
+    println!(
+        "Started      {}",
+        run.started_at.format("%Y-%m-%d %H:%M:%S UTC")
+    );
     println!("Duration     {}s", run.duration_secs());
     println!("Status       {}", run.status);
     println!();

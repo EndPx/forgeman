@@ -113,9 +113,7 @@ impl EventSink for ConsoleSink {
                 stage,
                 message,
                 attempt,
-            } => eprintln!(
-                "[{ts}]   ✗ {stage} attempt {attempt}: {message}{iter}"
-            ),
+            } => eprintln!("[{ts}]   ✗ {stage} attempt {attempt}: {message}{iter}"),
             EventKind::DecisionCreated { summary } => {
                 eprintln!("[{ts}]   ⚑ decision{iter}: {summary}")
             }
@@ -145,11 +143,14 @@ impl JsonlSink {
 impl EventSink for JsonlSink {
     fn record(&self, event: &Event) {
         let path = self.events_path(&event.run_id);
-        if let Some(parent) = path.parent() {
-            if let Err(err) = std::fs::create_dir_all(parent) {
-                eprintln!("warning: cannot create event dir {}: {err}", parent.display());
-                return;
-            }
+        if let Some(parent) = path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            eprintln!(
+                "warning: cannot create event dir {}: {err}",
+                parent.display()
+            );
+            return;
         }
         match serde_json::to_string(event) {
             Ok(line) => {
@@ -159,7 +160,10 @@ impl EventSink for JsonlSink {
                     .open(&path)
                     .and_then(|mut f| writeln!(f, "{line}"));
                 if let Err(err) = result {
-                    eprintln!("warning: failed to append event to {}: {err}", path.display());
+                    eprintln!(
+                        "warning: failed to append event to {}: {err}",
+                        path.display()
+                    );
                 }
             }
             Err(err) => eprintln!("warning: failed to serialize event: {err}"),

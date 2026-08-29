@@ -10,7 +10,8 @@ use chrono::Utc;
 use crate::config::Config;
 use crate::core::events::{Event, EventKind, EventSink};
 use crate::core::model::{
-    FailureRecord, Iteration, Run, RunStatus, StageName, StageResult, StageStatus, Task, TestSummary,
+    FailureRecord, Iteration, Run, RunStatus, StageName, StageResult, StageStatus, Task,
+    TestSummary,
 };
 use crate::core::stage::{RunContext, Stage};
 use crate::core::store::RunStore;
@@ -29,7 +30,9 @@ impl Default for StageRegistry {
 
 impl StageRegistry {
     pub fn new() -> Self {
-        Self { stages: HashMap::new() }
+        Self {
+            stages: HashMap::new(),
+        }
     }
 
     pub fn register(&mut self, stage: Arc<dyn Stage>) {
@@ -75,7 +78,9 @@ impl Orchestrator {
         sinks.record(&Event::now(
             &ctx.run.id,
             None,
-            EventKind::TaskCreated { description: ctx.task.description.clone() },
+            EventKind::TaskCreated {
+                description: ctx.task.description.clone(),
+            },
         ));
         sinks.record(&Event::now(&ctx.run.id, None, EventKind::RunStarted));
 
@@ -107,7 +112,8 @@ impl Orchestrator {
 
         for name in PREAMBLE {
             if let Err(reason) = self.run_stage(name, &mut ctx, sinks).await {
-                self.finish(&mut ctx, RunStatus::Failed { reason }, store, sinks).await;
+                self.finish(&mut ctx, RunStatus::Failed { reason }, store, sinks)
+                    .await;
                 return ctx.run;
             }
         }
@@ -143,24 +149,27 @@ impl Orchestrator {
             }
             let passed = tests.as_ref().is_some_and(TestSummary::all_passed);
 
-            if !passed {
-                if let Err(reason) = self.run_stage(StageName::Diagnose, &mut ctx, sinks).await {
-                    break RunStatus::Failed { reason };
-                }
+            if !passed
+                && let Err(reason) = self.run_stage(StageName::Diagnose, &mut ctx, sinks).await
+            {
+                break RunStatus::Failed { reason };
             }
 
             sinks.record(&Event::now(
                 &ctx.run.id,
                 Some(index),
-                EventKind::IterationCompleted { index, tests_passed: passed },
+                EventKind::IterationCompleted {
+                    index,
+                    tests_passed: passed,
+                },
             ));
 
             // Stop condition: all tests pass and no critical regression.
             if passed && ctx.critical_regressions() == 0 {
-                if self.registry.contains(StageName::Verify) {
-                    if let Err(reason) = self.run_stage(StageName::Verify, &mut ctx, sinks).await {
-                        break RunStatus::Failed { reason };
-                    }
+                if self.registry.contains(StageName::Verify)
+                    && let Err(reason) = self.run_stage(StageName::Verify, &mut ctx, sinks).await
+                {
+                    break RunStatus::Failed { reason };
                 }
                 break RunStatus::Verified;
             }
@@ -178,10 +187,10 @@ impl Orchestrator {
             }
         };
 
-        if self.registry.contains(StageName::Report) {
-            if let Err(reason) = self.run_stage(StageName::Report, &mut ctx, sinks).await {
-                final_status = RunStatus::Failed { reason };
-            }
+        if self.registry.contains(StageName::Report)
+            && let Err(reason) = self.run_stage(StageName::Report, &mut ctx, sinks).await
+        {
+            final_status = RunStatus::Failed { reason };
         }
 
         self.finish(&mut ctx, final_status, store, sinks).await;
@@ -321,7 +330,7 @@ impl Orchestrator {
 mod tests {
     use super::*;
     use crate::core::events::JsonlSink;
-    use crate::core::model::{new_task_id, TestSummary};
+    use crate::core::model::{TestSummary, new_task_id};
     use crate::core::stage::{StageError, StageOutput};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
@@ -348,7 +357,10 @@ mod tests {
     }
 
     fn fake(name: StageName) -> Arc<dyn Stage> {
-        Arc::new(FakeStage { name, behavior: |_| Ok(StageOutput::default()) })
+        Arc::new(FakeStage {
+            name,
+            behavior: |_| Ok(StageOutput::default()),
+        })
     }
 
     fn publish_tests(failed: u32) -> Result<StageOutput, StageError> {
@@ -425,7 +437,9 @@ mod tests {
         })));
         let sink = CollectedSink::default();
 
-        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+        let run = orch
+            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .await;
 
         assert_eq!(run.status, RunStatus::Verified);
         assert_eq!(run.iterations.len(), 1);
@@ -449,7 +463,9 @@ mod tests {
         })));
         let sink = CollectedSink::default();
 
-        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+        let run = orch
+            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .await;
 
         assert_eq!(run.status, RunStatus::Verified);
         assert_eq!(run.iterations.len(), 3);
@@ -467,7 +483,12 @@ mod tests {
         })));
 
         let run = orch
-            .execute_run(make_task(), config_with(2, 3), &store, &CollectedSink::default())
+            .execute_run(
+                make_task(),
+                config_with(2, 3),
+                &store,
+                &CollectedSink::default(),
+            )
             .await;
 
         assert_eq!(run.status, RunStatus::Exhausted { iterations: 2 });
@@ -481,11 +502,16 @@ mod tests {
         let orch = Orchestrator::new(StageRegistry::new());
         let sink = CollectedSink::default();
 
-        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+        let run = orch
+            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .await;
 
         match &run.status {
             RunStatus::Aborted { reason } => {
-                assert!(reason.contains("inspect"), "reason should name missing stages: {reason}");
+                assert!(
+                    reason.contains("inspect"),
+                    "reason should name missing stages: {reason}"
+                );
             }
             other => panic!("expected Aborted, got {other:?}"),
         }
@@ -510,7 +536,9 @@ mod tests {
         let orch = Orchestrator::new(reg);
         let sink = CollectedSink::default();
 
-        let run = orch.execute_run(make_task(), config_with(5, 2), &store, &sink).await;
+        let run = orch
+            .execute_run(make_task(), config_with(5, 2), &store, &sink)
+            .await;
 
         match &run.status {
             RunStatus::Failed { reason } => {
@@ -541,7 +569,9 @@ mod tests {
         let mut config = config_with(5, 3);
         config.execution.timeout_minutes = 0;
 
-        let run = orch.execute_run(make_task(), config, &store, &CollectedSink::default()).await;
+        let run = orch
+            .execute_run(make_task(), config, &store, &CollectedSink::default())
+            .await;
 
         assert_eq!(run.status, RunStatus::TimedOut);
         assert!(run.iterations.is_empty());
@@ -556,12 +586,19 @@ mod tests {
         sink.record(&Event::now(
             "run_20260829_000000_aaa111",
             Some(0),
-            EventKind::StageStarted { stage: StageName::Test },
+            EventKind::StageStarted {
+                stage: StageName::Test,
+            },
         ));
 
-        let path = runs_root.join("run_20260829_000000_aaa111").join("events.jsonl");
+        let path = runs_root
+            .join("run_20260829_000000_aaa111")
+            .join("events.jsonl");
         let content = std::fs::read_to_string(&path).unwrap();
-        assert!(content.contains("\"event\":\"stage.started\""), "got: {content}");
+        assert!(
+            content.contains("\"event\":\"stage.started\""),
+            "got: {content}"
+        );
         assert!(content.contains("\"stage\":\"test\""), "got: {content}");
     }
 }

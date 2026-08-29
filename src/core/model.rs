@@ -87,13 +87,19 @@ pub enum RunStatus {
     /// All critical tests passed and no critical regression — evidence-backed.
     Verified,
     /// A stage failed repeatedly and ForgeMan escalated instead of retrying forever.
-    Failed { reason: String },
+    Failed {
+        reason: String,
+    },
     /// Stop condition: iteration budget exhausted without verification.
-    Exhausted { iterations: u32 },
+    Exhausted {
+        iterations: u32,
+    },
     TimedOut,
     BudgetExceeded,
     /// Run could not proceed (e.g. required stages missing at this build phase).
-    Aborted { reason: String },
+    Aborted {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

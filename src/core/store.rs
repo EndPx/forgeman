@@ -36,8 +36,7 @@ impl RunStore {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
         let path = dir.join("run.json");
-        let json = serde_json::to_string_pretty(run)
-            .context("failed to serialize run record")?;
+        let json = serde_json::to_string_pretty(run).context("failed to serialize run record")?;
         std::fs::write(&path, json)
             .with_context(|| format!("failed to write {}", path.display()))?;
         Ok(path)
@@ -58,12 +57,12 @@ impl RunStore {
         let mut ids = Vec::new();
         for entry in std::fs::read_dir(&self.root)? {
             let entry = entry?;
-            if entry.file_type()?.is_dir() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if name.starts_with("run_") && self.run_dir(name).join("run.json").exists() {
-                        ids.push(name.to_string());
-                    }
-                }
+            if entry.file_type()?.is_dir()
+                && let Some(name) = entry.file_name().to_str()
+                && name.starts_with("run_")
+                && self.run_dir(name).join("run.json").exists()
+            {
+                ids.push(name.to_string());
             }
         }
         ids.sort();
@@ -79,7 +78,7 @@ impl RunStore {
 mod tests {
     use super::*;
     use crate::config::Config;
-    use crate::core::model::{new_run_id, new_task_id, Run, RunStatus, Task};
+    use crate::core::model::{Run, RunStatus, Task, new_run_id, new_task_id};
     use chrono::Utc;
     use std::path::PathBuf;
 
@@ -112,16 +111,25 @@ mod tests {
         let store = RunStore::new(tmp.path());
         assert_eq!(store.list_run_ids().unwrap(), Vec::<String>::new());
 
-        store.save_run(&make_run("run_20260829_120000_abc123")).unwrap();
-        store.save_run(&make_run("run_20260829_120001_def456")).unwrap();
-        store.save_run(&make_run("run_20260828_235900_000aaa")).unwrap();
+        store
+            .save_run(&make_run("run_20260829_120000_abc123"))
+            .unwrap();
+        store
+            .save_run(&make_run("run_20260829_120001_def456"))
+            .unwrap();
+        store
+            .save_run(&make_run("run_20260828_235900_000aaa"))
+            .unwrap();
         // Directory without run.json is ignored.
         std::fs::create_dir_all(tmp.path().join(".forgeman/runs/run_junk")).unwrap();
 
         let ids = store.list_run_ids().unwrap();
         assert_eq!(ids.len(), 3);
         assert_eq!(ids[0], "run_20260828_235900_000aaa");
-        assert_eq!(store.latest_run_id().unwrap().unwrap(), "run_20260829_120001_def456");
+        assert_eq!(
+            store.latest_run_id().unwrap().unwrap(),
+            "run_20260829_120001_def456"
+        );
     }
 
     #[test]

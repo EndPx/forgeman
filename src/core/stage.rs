@@ -25,11 +25,17 @@ pub enum StageError {
 
 impl StageError {
     pub fn failed(stage: StageName, message: impl Into<String>) -> Self {
-        Self::Failed { stage, message: message.into() }
+        Self::Failed {
+            stage,
+            message: message.into(),
+        }
     }
 
     pub fn blocked(stage: StageName, message: impl Into<String>) -> Self {
-        Self::Blocked { stage, message: message.into() }
+        Self::Blocked {
+            stage,
+            message: message.into(),
+        }
     }
 
     pub fn is_retryable(&self) -> bool {
@@ -76,7 +82,12 @@ pub struct RunContext {
 
 impl RunContext {
     pub fn new(config: Config, task: Task, run: Run) -> Self {
-        Self { config, task, run, artifacts: BTreeMap::new() }
+        Self {
+            config,
+            task,
+            run,
+            artifacts: BTreeMap::new(),
+        }
     }
 
     pub fn put_artifact(&mut self, key: impl Into<String>, value: serde_json::Value) {
