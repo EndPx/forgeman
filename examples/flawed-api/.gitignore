@@ -1,0 +1,4 @@
+# ForgeMan run artifacts and credentials stay local
+.env
+.forgeman/
+target/

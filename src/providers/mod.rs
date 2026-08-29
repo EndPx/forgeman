@@ -25,6 +25,9 @@ pub struct Prompt {
     pub user: String,
     pub max_tokens: u32,
     pub temperature: Option<f32>,
+    /// Ask reasoning-capable models (GLM) to skip chain-of-thought so the
+    /// whole budget goes to the answer. Used by edit-heavy JSON stages.
+    pub thinking_disabled: bool,
 }
 
 impl Prompt {
@@ -34,6 +37,7 @@ impl Prompt {
             user: user.into(),
             max_tokens: 4096,
             temperature: None,
+            thinking_disabled: false,
         }
     }
 
@@ -44,6 +48,11 @@ impl Prompt {
 
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = max_tokens;
+        self
+    }
+
+    pub fn without_thinking(mut self) -> Self {
+        self.thinking_disabled = true;
         self
     }
 }

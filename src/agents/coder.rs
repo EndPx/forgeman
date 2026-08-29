@@ -16,7 +16,7 @@ use crate::providers::AgentProvider;
 use crate::tools;
 
 use super::analyze::TaskAnalysis;
-use super::llm::{complete, extract_json};
+use super::llm::extract_json;
 use super::plan::ImplementationPlan;
 
 pub const CODER_SYSTEM: &str = "\
@@ -33,8 +33,12 @@ JSON object, no prose, no markdown fences, matching this exact schema:\n\
   ]\n\
 }\n\
 Rules: `content` must be the COMPLETE final file content (not a diff, not a \
-snippet). Only touch files needed for the change. Never create files outside \
-the repository. Keep existing code style.";
+snippet). Make the MINIMAL change that satisfies the plan. Only touch files \
+named in the plan, the analysis, or the RELEVANT FILES section. Do NOT add \
+dependencies, do NOT modify Cargo.toml or package.json, do NOT rename the \
+package, do NOT create new binaries or modules unless the plan explicitly \
+requires it. Never create files outside the repository. Keep existing code \
+style.";
 
 /// Maximum files embedded in the coder prompt (context budget).
 const MAX_CONTEXT_FILES: usize = 10;
@@ -100,7 +104,9 @@ pub async fn produce_edits(
     system: &str,
     user: String,
 ) -> Result<(CoderOutput, crate::providers::Response), String> {
-    let response = complete(provider, system, user).await?;
+    // Whole-file edits are long, and GLM-style reasoning models spend part
+    // of the budget thinking — give them headroom and skip the thinking.
+    let response = super::llm::complete_edits(provider, system, user).await?;
     let value = extract_json(&response.text)
         .ok_or_else(|| "LLM response contained no valid JSON".to_string())?;
     let output: CoderOutput =

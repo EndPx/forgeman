@@ -59,10 +59,11 @@ const LOOP_REQUIRED: [StageName; 4] = [
     StageName::Improve,
 ];
 /// Artifacts scoped to a single iteration; cleared when a new one starts.
-const ITERATION_ARTIFACTS: [&str; 5] = [
+///  deliberately persists — the Improve stage in the next
+/// iteration must read the previous iteration's diagnosis.
+const ITERATION_ARTIFACTS: [&str; 4] = [
     "tests.result",
     "tests.output",
-    "failure.analysis",
     "implementation.changes",
     "improvement.changes",
 ];
@@ -268,8 +269,10 @@ impl Orchestrator {
         let max_attempts = ctx.config.execution.max_stage_attempts;
         let mut last_error = String::new();
         let mut total_duration_ms: u64 = 0;
+        let mut attempts_used: u32 = 0;
 
         for attempt in 1..=max_attempts {
+            attempts_used = attempt;
             let iter_index = ctx.current_iteration_index();
             sinks.record(&Event::now(
                 &ctx.run.id,
@@ -364,7 +367,7 @@ impl Orchestrator {
         });
 
         Err(format!(
-            "unable to automatically resolve stage `{name}` after {max_attempts} attempt(s). Last error: {last_error}"
+            "unable to automatically resolve stage `{name}` after {attempts_used} attempt(s). Last error: {last_error}"
         ))
     }
 

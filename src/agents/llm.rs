@@ -26,7 +26,33 @@ pub async fn complete(
     system: &str,
     user: String,
 ) -> Result<Response, String> {
-    let prompt = Prompt::new(user).with_system(system);
+    complete_with_max(provider, system, user, 4096).await
+}
+
+/// `complete` with an explicit token budget (edit-heavy stages need more).
+pub async fn complete_with_max(
+    provider: &dyn AgentProvider,
+    system: &str,
+    user: String,
+    max_tokens: u32,
+) -> Result<Response, String> {
+    let prompt = Prompt::new(user)
+        .with_system(system)
+        .with_max_tokens(max_tokens);
+    provider.run(&prompt).await.map_err(|err| err.to_string())
+}
+
+/// Completion for edit-producing stages: large budget and no chain-of-thought
+/// (reasoning models would otherwise spend the entire budget thinking).
+pub async fn complete_edits(
+    provider: &dyn AgentProvider,
+    system: &str,
+    user: String,
+) -> Result<Response, String> {
+    let prompt = Prompt::new(user)
+        .with_system(system)
+        .with_max_tokens(8192)
+        .without_thinking();
     provider.run(&prompt).await.map_err(|err| err.to_string())
 }
 

@@ -97,12 +97,17 @@ impl AgentProvider for ZaiProvider {
             }
             messages.push(json!({ "role": "user", "content": prompt.user }));
 
-            let body = json!({
+            let mut body = json!({
                 "model": self.model,
                 "messages": messages,
                 "max_tokens": prompt.max_tokens,
                 "stream": false,
             });
+            // GLM reasoning models: skip chain-of-thought when asked, so the
+            // token budget lands on the actual answer.
+            if prompt.thinking_disabled {
+                body["thinking"] = json!({ "type": "disabled" });
+            }
 
             let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
             // Free tier occasionally returns 429 (overloaded). Retry with a
