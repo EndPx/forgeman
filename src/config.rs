@@ -28,9 +28,12 @@ pub struct ProjectConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AgentConfig {
-    /// Model provider backing the coding agent (pluggable from Phase 3).
+    /// Model provider backing the coding agent: `anthropic` | `openai`.
     pub provider: String,
     pub model: String,
+    /// Override the provider API base URL (self-hosted / OpenAI-compatible
+    /// endpoints). Defaults to the vendor's public API.
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,8 +78,10 @@ impl Default for ProjectConfig {
 impl Default for AgentConfig {
     fn default() -> Self {
         Self {
-            provider: "anthropic".to_string(),
-            model: "claude".to_string(),
+            // Z.AI GLM flash tier — free, used by default for this project.
+            provider: "zai".to_string(),
+            model: "glm-4.7-flash".to_string(),
+            base_url: None,
         }
     }
 }
@@ -197,7 +202,8 @@ mod tests {
         assert!(config.evaluation.tests);
         assert!(!config.evaluation.performance);
         assert!(!config.evaluation.security);
-        assert_eq!(config.agent.provider, "anthropic");
+        assert_eq!(config.agent.provider, "zai");
+        assert_eq!(config.agent.model, "glm-4.7-flash");
         assert_eq!(config.sandbox.network, "restricted");
         assert_eq!(config.timeout(), Duration::from_secs(20 * 60));
     }

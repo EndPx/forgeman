@@ -2,6 +2,8 @@ mod agents;
 mod cli;
 mod config;
 mod core;
+mod env;
+mod providers;
 mod repository;
 
 use anyhow::{Context, Result};
@@ -18,6 +20,8 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
+    // Provider credentials live in .env (gitignored). CWD first, then repo.
+    env::load_dotenv(std::path::Path::new(".env"));
     let cli = Cli::parse();
     if let Err(err) = dispatch(cli).await {
         eprintln!("error: {err:#}");
@@ -36,6 +40,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Some(path) => path,
         None => std::env::current_dir().expect("current directory is readable"),
     };
+    env::load_dotenv(&repo_root.join(".env"));
 
     match command {
         Command::Init => {
