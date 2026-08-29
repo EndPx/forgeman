@@ -24,3 +24,8 @@ Thumbs.db
 # ForgeMan runtime artifacts
 .forgeman/
 *.log
+
+
+# Added by cargo
+
+/target
