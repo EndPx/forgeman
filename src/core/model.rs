@@ -116,6 +116,21 @@ pub struct Run {
     pub iterations: Vec<Iteration>,
     /// Accumulated LLM spend, updated by provider-backed stages (Phase 3+).
     pub total_cost_usd: f64,
+    /// Every tool invocation performed during the run (spec §36 audit log).
+    #[serde(default)]
+    pub tool_executions: Vec<ToolExecution>,
+}
+
+/// Audit record for one tool invocation (file write, shell command, …).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolExecution {
+    pub tool: String,
+    pub arguments: serde_json::Value,
+    pub result: String,
+    pub exit_code: Option<i32>,
+    pub duration_ms: u64,
+    pub timestamp: DateTime<Utc>,
+    pub iteration: Option<u32>,
 }
 
 impl Run {
@@ -130,6 +145,7 @@ impl Run {
             preamble_results: Vec::new(),
             iterations: Vec::new(),
             total_cost_usd: 0.0,
+            tool_executions: Vec::new(),
         }
     }
 

@@ -2,6 +2,7 @@
 //! as a `Stage` the orchestrator can run.
 
 pub mod analyze;
+pub mod coder;
 pub mod inspect;
 pub mod llm;
 pub mod plan;

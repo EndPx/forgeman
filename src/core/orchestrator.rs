@@ -229,6 +229,10 @@ impl Orchestrator {
                     for (key, value) in output.artifacts {
                         ctx.put_artifact(key, value);
                     }
+                    // Flush stage-deferred events (tool executions, …).
+                    for kind in ctx.event_buffer.drain(..) {
+                        sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
+                    }
                     ctx.push_stage_result(StageResult {
                         stage: name,
                         status: StageStatus::Success,
@@ -257,6 +261,9 @@ impl Orchestrator {
                     } else {
                         StageStatus::Escalated
                     };
+                    for kind in ctx.event_buffer.drain(..) {
+                        sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
+                    }
                     sinks.record(&Event::now(
                         &ctx.run.id,
                         iter_index,

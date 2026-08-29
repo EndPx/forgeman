@@ -35,6 +35,15 @@ pub enum EventKind {
     },
     #[serde(rename = "decision.created")]
     DecisionCreated { summary: String },
+    #[serde(rename = "tool.started")]
+    ToolStarted { tool: String },
+    #[serde(rename = "tool.completed")]
+    ToolCompleted {
+        tool: String,
+        ok: bool,
+        duration_ms: u64,
+        exit_code: Option<i32>,
+    },
     #[serde(rename = "run.completed")]
     RunCompleted { status: RunStatus },
 }
@@ -116,6 +125,16 @@ impl EventSink for ConsoleSink {
             } => eprintln!("[{ts}]   ✗ {stage} attempt {attempt}: {message}{iter}"),
             EventKind::DecisionCreated { summary } => {
                 eprintln!("[{ts}]   ⚑ decision{iter}: {summary}")
+            }
+            EventKind::ToolStarted { tool } => eprintln!("[{ts}]   ⚙ {tool}{iter} …"),
+            EventKind::ToolCompleted {
+                tool,
+                ok,
+                duration_ms,
+                ..
+            } => {
+                let mark = if *ok { "✓" } else { "✗" };
+                eprintln!("[{ts}]   ⚙ {tool} {mark} ({duration_ms}ms){iter}")
             }
             EventKind::RunCompleted { status } => {
                 eprintln!("[{ts}] ■ run {} completed — {status}", event.run_id)

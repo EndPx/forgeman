@@ -77,6 +77,29 @@ pub fn inspect(root: &Path) -> Result<RepositoryProfile> {
 
 type FileList = Vec<(String, usize)>;
 
+/// Relative paths of text files in the repository (bounded walk) — used by
+/// the file-search tool and context selection.
+pub fn list_text_files(root: &Path) -> Result<Vec<String>, String> {
+    let files = walk(root).map_err(|err| err.to_string())?;
+    Ok(files
+        .into_iter()
+        .filter(|(rel, _)| is_text_path(rel))
+        .map(|(rel, _)| rel)
+        .collect())
+}
+
+fn is_text_path(relative: &str) -> bool {
+    const BINARY_EXT: &[&str] = &[
+        "png", "jpg", "jpeg", "gif", "ico", "svgz", "woff", "woff2", "ttf", "eot", "zip", "gz",
+        "tar", "rar", "7z", "pdf", "exe", "dll", "so", "dylib", "class", "jar", "bin", "mp3",
+        "mp4", "avi", "mov", "sqlite", "db", "pdb",
+    ];
+    match extension_of(relative) {
+        Some(ext) => !BINARY_EXT.contains(&ext),
+        None => true,
+    }
+}
+
 /// Bounded recursive walk returning (relative path with forward slashes, size).
 fn walk(root: &Path) -> Result<FileList> {
     let mut files = Vec::new();

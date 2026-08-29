@@ -78,6 +78,9 @@ pub struct RunContext {
     pub task: Task,
     pub run: Run,
     pub artifacts: BTreeMap<String, serde_json::Value>,
+    /// Events stages want emitted (e.g. tool.completed). The orchestrator
+    /// drains and records these after each stage attempt.
+    pub event_buffer: Vec<crate::core::events::EventKind>,
 }
 
 impl RunContext {
@@ -87,7 +90,14 @@ impl RunContext {
             task,
             run,
             artifacts: BTreeMap::new(),
+            event_buffer: Vec::new(),
         }
+    }
+
+    /// Emit a stage-generated event through the orchestrator once the stage
+    /// attempt finishes.
+    pub fn defer_event(&mut self, kind: crate::core::events::EventKind) {
+        self.event_buffer.push(kind);
     }
 
     pub fn put_artifact(&mut self, key: impl Into<String>, value: serde_json::Value) {

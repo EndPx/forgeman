@@ -5,6 +5,7 @@ mod core;
 mod env;
 mod providers;
 mod repository;
+mod tools;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -147,8 +148,14 @@ fn build_registry(config: &Config) -> Result<StageRegistry> {
     registry.register(Arc::new(agents::analyze::AnalyzeStage {
         provider: provider.clone(),
     }));
-    registry.register(Arc::new(agents::plan::PlanStage { provider }));
-    // Phases 5–8: coder, test runner, diagnoser, improver, verifier —
+    registry.register(Arc::new(agents::plan::PlanStage {
+        provider: provider.clone(),
+    }));
+    // Phase 5: coder — applies edits through the audited tool layer.
+    registry.register(Arc::new(agents::coder::CoderStage {
+        provider: provider.clone(),
+    }));
+    // Phases 6–8: test runner, diagnoser, improver, verifier —
     // registered as they land.
     Ok(registry)
 }
