@@ -22,6 +22,7 @@ pub enum StageName {
 }
 
 impl StageName {
+    #[allow(dead_code)] // consumed by stage implementations in Phases 2–8
     pub const ALL: [StageName; 9] = [
         StageName::Inspect,
         StageName::Analyze,

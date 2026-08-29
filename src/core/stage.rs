@@ -1,3 +1,6 @@
+// Framework surface consumed by stage implementations landing in Phases 2–8.
+#![allow(dead_code)]
+
 use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::future::Future;

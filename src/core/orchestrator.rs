@@ -1,3 +1,6 @@
+// Registry/execution surface consumed by stage implementations landing in Phases 2–8.
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
