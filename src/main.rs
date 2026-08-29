@@ -155,7 +155,9 @@ fn build_registry(config: &Config) -> Result<StageRegistry> {
     registry.register(Arc::new(agents::coder::CoderStage {
         provider: provider.clone(),
     }));
-    // Phases 6–8: test runner, diagnoser, improver, verifier —
+    // Phase 6: test runner — ecosystem detection + result parsing.
+    registry.register(Arc::new(agents::test_runner::TestStage));
+    // Phases 7–8: diagnoser, improver, verifier — registered as they land.
     // registered as they land.
     Ok(registry)
 }

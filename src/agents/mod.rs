@@ -6,3 +6,4 @@ pub mod coder;
 pub mod inspect;
 pub mod llm;
 pub mod plan;
+pub mod test_runner;
