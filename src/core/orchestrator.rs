@@ -200,6 +200,7 @@ impl Orchestrator {
 
         let max_attempts = ctx.config.execution.max_stage_attempts;
         let mut last_error = String::new();
+        let mut total_duration_ms: u64 = 0;
 
         for attempt in 1..=max_attempts {
             let iter_index = ctx.current_iteration_index();
@@ -237,6 +238,7 @@ impl Orchestrator {
                 }
                 Err(err) => {
                     let duration_ms = started.elapsed().as_millis() as u64;
+                    total_duration_ms += duration_ms;
                     let message = err.to_string();
                     let status = if err.is_retryable() {
                         StageStatus::Failed
@@ -277,6 +279,16 @@ impl Orchestrator {
             }
         }
 
+        // Record the escalated outcome so iterations always show what happened,
+        // including stages that never succeeded (spec: iteration evidence).
+        ctx.push_stage_result(StageResult {
+            stage: name,
+            status: StageStatus::Escalated,
+            attempts: max_attempts,
+            duration_ms: total_duration_ms,
+            detail: Some(last_error.clone()),
+        });
+
         Err(format!(
             "unable to automatically resolve stage `{name}` after {max_attempts} attempt(s). Last error: {last_error}"
         ))
@@ -299,5 +311,254 @@ impl Orchestrator {
         if let Err(err) = store.save_run(&ctx.run) {
             eprintln!("warning: failed to persist run record: {err:#}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::events::JsonlSink;
+    use crate::core::model::{new_task_id, TestSummary};
+    use crate::core::stage::{StageError, StageOutput};
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+
+    struct FakeStage<F>
+    where
+        F: Fn(&mut RunContext) -> Result<StageOutput, StageError> + Send + Sync,
+    {
+        name: StageName,
+        behavior: F,
+    }
+
+    impl<F> Stage for FakeStage<F>
+    where
+        F: Fn(&mut RunContext) -> Result<StageOutput, StageError> + Send + Sync,
+    {
+        fn name(&self) -> StageName {
+            self.name
+        }
+
+        fn execute<'a>(&'a self, ctx: &'a mut RunContext) -> crate::core::stage::StageFuture<'a> {
+            Box::pin(async move { (self.behavior)(ctx) })
+        }
+    }
+
+    fn fake(name: StageName) -> Arc<dyn Stage> {
+        Arc::new(FakeStage { name, behavior: |_| Ok(StageOutput::default()) })
+    }
+
+    fn publish_tests(failed: u32) -> Result<StageOutput, StageError> {
+        let summary = TestSummary {
+            total: 10,
+            passed: 10 - failed,
+            failed,
+            command: "fake".into(),
+            duration_ms: 1,
+        };
+        Ok(StageOutput::default()
+            .with_artifact("tests.result", serde_json::to_value(summary).unwrap()))
+    }
+
+    fn improving_stage() -> Arc<dyn Stage> {
+        Arc::new(FakeStage {
+            name: StageName::Improve,
+            behavior: |ctx| {
+                let fixes = ctx.artifact("fixes").and_then(|v| v.as_u64()).unwrap_or(0) + 1;
+                ctx.put_artifact("fixes", serde_json::json!(fixes));
+                Ok(StageOutput::default())
+            },
+        })
+    }
+
+    fn full_registry(test: Arc<dyn Stage>) -> StageRegistry {
+        let mut reg = StageRegistry::new();
+        reg.register(fake(StageName::Inspect));
+        reg.register(fake(StageName::Analyze));
+        reg.register(fake(StageName::Plan));
+        reg.register(fake(StageName::Implement));
+        reg.register(test);
+        reg.register(fake(StageName::Diagnose));
+        reg.register(improving_stage());
+        reg.register(fake(StageName::Verify));
+        reg.register(fake(StageName::Report));
+        reg
+    }
+
+    fn config_with(max_iterations: u32, attempts: u32) -> Config {
+        let mut c = Config::default();
+        c.execution.max_iterations = max_iterations;
+        c.execution.max_stage_attempts = attempts;
+        c
+    }
+
+    fn make_task() -> Task {
+        Task {
+            id: new_task_id(),
+            description: "Fix the authentication bug".into(),
+            repo_root: PathBuf::from("."),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[derive(Default, Clone)]
+    struct CollectedSink {
+        events: Arc<Mutex<Vec<Event>>>,
+    }
+
+    impl EventSink for CollectedSink {
+        fn record(&self, event: &Event) {
+            self.events.lock().unwrap().push(event.clone());
+        }
+    }
+
+    #[tokio::test]
+    async fn run_completes_verified_when_tests_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let orch = Orchestrator::new(full_registry(Arc::new(FakeStage {
+            name: StageName::Test,
+            behavior: |_| publish_tests(0),
+        })));
+        let sink = CollectedSink::default();
+
+        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+
+        assert_eq!(run.status, RunStatus::Verified);
+        assert_eq!(run.iterations.len(), 1);
+        assert_eq!(run.preamble_results.len(), 3);
+        assert!(run.iterations[0].tests.as_ref().unwrap().all_passed());
+        // The run record is persisted with matching status.
+        let reloaded = store.load_run(&run.id).unwrap();
+        assert_eq!(reloaded.status, RunStatus::Verified);
+    }
+
+    #[tokio::test]
+    async fn run_improves_until_tests_pass() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let orch = Orchestrator::new(full_registry(Arc::new(FakeStage {
+            name: StageName::Test,
+            behavior: |ctx| {
+                let fixes = ctx.artifact("fixes").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                publish_tests(if fixes >= 2 { 0 } else { 3 })
+            },
+        })));
+        let sink = CollectedSink::default();
+
+        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+
+        assert_eq!(run.status, RunStatus::Verified);
+        assert_eq!(run.iterations.len(), 3);
+        assert_eq!(run.iterations[0].tests.as_ref().unwrap().failed, 3);
+        assert_eq!(run.iterations[2].tests.as_ref().unwrap().failed, 0);
+    }
+
+    #[tokio::test]
+    async fn run_exhausts_at_max_iterations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let orch = Orchestrator::new(full_registry(Arc::new(FakeStage {
+            name: StageName::Test,
+            behavior: |_| publish_tests(3),
+        })));
+
+        let run = orch
+            .execute_run(make_task(), config_with(2, 3), &store, &CollectedSink::default())
+            .await;
+
+        assert_eq!(run.status, RunStatus::Exhausted { iterations: 2 });
+        assert_eq!(run.iterations.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_aborts_when_required_stages_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let orch = Orchestrator::new(StageRegistry::new());
+        let sink = CollectedSink::default();
+
+        let run = orch.execute_run(make_task(), config_with(5, 3), &store, &sink).await;
+
+        match &run.status {
+            RunStatus::Aborted { reason } => {
+                assert!(reason.contains("inspect"), "reason should name missing stages: {reason}");
+            }
+            other => panic!("expected Aborted, got {other:?}"),
+        }
+        // Even aborted runs are persisted as evidence.
+        let reloaded = store.load_run(&run.id).unwrap();
+        assert_eq!(reloaded.status, run.status);
+    }
+
+    #[tokio::test]
+    async fn run_fails_after_repeated_stage_failures() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let mut reg = StageRegistry::new();
+        reg.register(fake(StageName::Inspect));
+        reg.register(fake(StageName::Analyze));
+        reg.register(fake(StageName::Plan));
+        reg.register(Arc::new(FakeStage {
+            name: StageName::Implement,
+            behavior: |_| Err(StageError::failed(StageName::Implement, "boom")),
+        }));
+        reg.register(fake(StageName::Test));
+        let orch = Orchestrator::new(reg);
+        let sink = CollectedSink::default();
+
+        let run = orch.execute_run(make_task(), config_with(5, 2), &store, &sink).await;
+
+        match &run.status {
+            RunStatus::Failed { reason } => {
+                assert!(reason.contains("after 2 attempt(s)"), "got: {reason}");
+                assert!(reason.contains("boom"));
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        assert_eq!(run.iterations[0].stage_results[0].attempts, 2);
+        let failures = sink
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e.kind, EventKind::FailureDetected { .. }))
+            .count();
+        assert_eq!(failures, 2, "one failure.detected event per attempt");
+    }
+
+    #[tokio::test]
+    async fn run_times_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let orch = Orchestrator::new(full_registry(Arc::new(FakeStage {
+            name: StageName::Test,
+            behavior: |_| publish_tests(0),
+        })));
+        let mut config = config_with(5, 3);
+        config.execution.timeout_minutes = 0;
+
+        let run = orch.execute_run(make_task(), config, &store, &CollectedSink::default()).await;
+
+        assert_eq!(run.status, RunStatus::TimedOut);
+        assert!(run.iterations.is_empty());
+    }
+
+    #[test]
+    fn jsonl_sink_writes_dotted_event_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runs_root = tmp.path().join("runs");
+        let sink = JsonlSink::new(runs_root.clone());
+
+        sink.record(&Event::now(
+            "run_20260829_000000_aaa111",
+            Some(0),
+            EventKind::StageStarted { stage: StageName::Test },
+        ));
+
+        let path = runs_root.join("run_20260829_000000_aaa111").join("events.jsonl");
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\"event\":\"stage.started\""), "got: {content}");
+        assert!(content.contains("\"stage\":\"test\""), "got: {content}");
     }
 }
