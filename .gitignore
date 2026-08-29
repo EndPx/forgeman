@@ -1,0 +1,26 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / Next.js (web dashboard)
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+
+# Environment & secrets — never commit
+.env
+.env.*
+*.pem
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ForgeMan runtime artifacts
+.forgeman/
+*.log
