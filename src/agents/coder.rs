@@ -90,7 +90,17 @@ pub async fn implement(
          IMPLEMENTATION PLAN:\n{plan_json}\n\nRELEVANT FILES:{context}\n\n\
          Produce the edits JSON now."
     );
-    let response = complete(provider, CODER_SYSTEM, user).await?;
+    produce_edits(provider, CODER_SYSTEM, user).await
+}
+
+/// Low-level edit request shared by the coder and the improver: send the
+/// prompt, parse the edit JSON, refuse empty edit sets.
+pub async fn produce_edits(
+    provider: &dyn AgentProvider,
+    system: &str,
+    user: String,
+) -> Result<(CoderOutput, crate::providers::Response), String> {
+    let response = complete(provider, system, user).await?;
     let value = extract_json(&response.text)
         .ok_or_else(|| "LLM response contained no valid JSON".to_string())?;
     let output: CoderOutput =
@@ -188,7 +198,7 @@ impl Stage for CoderStage {
 }
 
 /// Apply the LLM's edits through the audited tool layer.
-fn apply_edits(
+pub fn apply_edits(
     ctx: &mut RunContext,
     output: &CoderOutput,
 ) -> Result<ImplementationChanges, StageError> {

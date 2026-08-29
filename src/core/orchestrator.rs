@@ -50,7 +50,22 @@ impl StageRegistry {
 }
 
 const PREAMBLE: [StageName; 3] = [StageName::Inspect, StageName::Analyze, StageName::Plan];
-const LOOP: [StageName; 2] = [StageName::Implement, StageName::Test];
+/// Required for the loop: initial implementation, validation, diagnosis and
+/// improvement (improve runs in iterations 1+).
+const LOOP_REQUIRED: [StageName; 4] = [
+    StageName::Implement,
+    StageName::Test,
+    StageName::Diagnose,
+    StageName::Improve,
+];
+/// Artifacts scoped to a single iteration; cleared when a new one starts.
+const ITERATION_ARTIFACTS: [&str; 5] = [
+    "tests.result",
+    "tests.output",
+    "failure.analysis",
+    "implementation.changes",
+    "improvement.changes",
+];
 
 pub struct Orchestrator {
     registry: StageRegistry,
@@ -87,7 +102,7 @@ impl Orchestrator {
         // Fail fast when required stages are not registered yet.
         let missing: Vec<StageName> = PREAMBLE
             .into_iter()
-            .chain(LOOP)
+            .chain(LOOP_REQUIRED)
             .filter(|name| !self.registry.contains(*name))
             .collect();
         if !missing.is_empty() {
@@ -125,6 +140,12 @@ impl Orchestrator {
                 break RunStatus::TimedOut;
             }
 
+            // Iteration-scoped artifacts reset every loop; preamble artifacts
+            // (repository.profile, task.analysis, plan) persist.
+            for key in ITERATION_ARTIFACTS {
+                ctx.artifacts.remove(key);
+            }
+
             sinks.record(&Event::now(
                 &ctx.run.id,
                 Some(index),
@@ -132,8 +153,17 @@ impl Orchestrator {
             ));
             ctx.run.iterations.push(Iteration::new(index));
 
+            // Iteration 0 implements the plan; later iterations improve from
+            // the previous failure analysis (spec §47 loop: IMPROVE loops
+            // back through TEST → DIAGNOSE).
+            let work_stage = if index == 0 {
+                StageName::Implement
+            } else {
+                StageName::Improve
+            };
+
             let mut stage_failure: Option<String> = None;
-            for name in LOOP {
+            for name in [work_stage, StageName::Test] {
                 if let Err(reason) = self.run_stage(name, &mut ctx, sinks).await {
                     stage_failure = Some(reason);
                     break;
@@ -180,10 +210,6 @@ impl Orchestrator {
             }
             if ctx.run.total_cost_usd >= ctx.config.budget.max_cost_usd {
                 break RunStatus::BudgetExceeded;
-            }
-
-            if let Err(reason) = self.run_stage(StageName::Improve, &mut ctx, sinks).await {
-                break RunStatus::Failed { reason };
             }
         };
 
@@ -540,6 +566,8 @@ mod tests {
             behavior: |_| Err(StageError::failed(StageName::Implement, "boom")),
         }));
         reg.register(fake(StageName::Test));
+        reg.register(fake(StageName::Diagnose));
+        reg.register(fake(StageName::Improve));
         let orch = Orchestrator::new(reg);
         let sink = CollectedSink::default();
 

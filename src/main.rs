@@ -157,8 +157,15 @@ fn build_registry(config: &Config) -> Result<StageRegistry> {
     }));
     // Phase 6: test runner — ecosystem detection + result parsing.
     registry.register(Arc::new(agents::test_runner::TestStage));
-    // Phases 7–8: diagnoser, improver, verifier — registered as they land.
-    // registered as they land.
+    // Phase 7: failure analyzer — independent root-cause diagnosis.
+    registry.register(Arc::new(agents::diagnose::DiagnoseStage {
+        provider: provider.clone(),
+    }));
+    // Phase 8: iterative improvement + verification gate.
+    registry.register(Arc::new(agents::improve::ImproveStage {
+        provider: provider.clone(),
+    }));
+    registry.register(Arc::new(agents::verify::VerifyStage));
     Ok(registry)
 }
 

@@ -3,7 +3,10 @@
 
 pub mod analyze;
 pub mod coder;
+pub mod diagnose;
+pub mod improve;
 pub mod inspect;
 pub mod llm;
 pub mod plan;
 pub mod test_runner;
+pub mod verify;
