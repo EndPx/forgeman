@@ -1,6 +1,8 @@
+mod agents;
 mod cli;
 mod config;
 mod core;
+mod repository;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -12,6 +14,7 @@ use core::model::{Run, RunStatus, Task, new_task_id};
 use core::orchestrator::{Orchestrator, StageRegistry};
 use core::store::RunStore;
 use std::path::Path;
+use std::sync::Arc;
 
 #[tokio::main]
 async fn main() {
@@ -40,7 +43,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             println!("✓ ForgeMan config scaffolded at {}", path.display());
             println!("  Review execution/budget limits, then run: forgeman run \"<task>\"");
         }
-        Command::Inspect => pending("inspect", 2, "repository inspector"),
+        Command::Inspect => cmd_inspect(&repo_root)?,
         Command::Analyze { .. } => pending("analyze", 4, "task analyzer"),
         Command::Plan { .. } => pending("plan", 4, "planner"),
         Command::Run {
@@ -131,7 +134,73 @@ async fn cmd_run(
 }
 
 fn build_registry(_config: &Config) -> StageRegistry {
-    StageRegistry::new()
+    let mut registry = StageRegistry::new();
+    // Phase 2: repository explorer.
+    registry.register(Arc::new(agents::inspect::InspectStage));
+    // Phases 3–8: analyzer, planner, coder, test runner, diagnoser,
+    // improver, verifier — registered as they land.
+    registry
+}
+
+fn cmd_inspect(repo_root: &Path) -> Result<()> {
+    let profile = repository::inspector::inspect(repo_root)
+        .map_err(|err| anyhow::anyhow!("inspection failed: {err:#}"))?;
+
+    println!("REPOSITORY PROFILE");
+    println!("  Root          {}", profile.root.display());
+    println!(
+        "  Language      {} ({} file(s))",
+        profile.primary_language, profile.file_count
+    );
+    for share in profile.languages.iter().take(4) {
+        println!("    - {} ({})", share.language, share.files);
+    }
+    println!(
+        "  Framework     {}",
+        profile.framework.as_deref().unwrap_or("none detected")
+    );
+    println!(
+        "  Packages      {}",
+        profile
+            .package_manager
+            .as_deref()
+            .unwrap_or("none detected")
+    );
+    if !profile.entrypoints.is_empty() {
+        println!("  Entrypoints   {}", profile.entrypoints.join(", "));
+    }
+    if !profile.test_frameworks.is_empty() {
+        println!("  Tests         {}", profile.test_frameworks.join(", "));
+    }
+    if !profile.databases.is_empty() {
+        println!("  Databases     {}", profile.databases.join(", "));
+    }
+    if !profile.external_services.is_empty() {
+        println!("  Services      {}", profile.external_services.join(", "));
+    }
+    if !profile.config_files.is_empty() {
+        println!("  Config        {}", profile.config_files.join(", "));
+    }
+
+    let deps = profile.dependencies.len();
+    if deps > 0 {
+        println!("  Dependencies  {deps}");
+    }
+
+    println!("  Risk areas    {}", profile.risky_areas.len());
+    for area in profile.risky_areas.iter().take(8) {
+        println!("    - [{}] {}", area.category, area.path);
+    }
+
+    // Persist so later stages/commands can reuse the profile without re-walking.
+    let target = repo_root.join(config::FORGEMAN_DIR).join("profile.json");
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, serde_json::to_string_pretty(&profile)?)?;
+    println!();
+    println!("  Profile saved to {}", target.display());
+    Ok(())
 }
 
 fn print_run_summary(run: &Run, store: &RunStore) {
