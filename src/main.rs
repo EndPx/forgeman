@@ -3,6 +3,7 @@ mod cli;
 mod config;
 mod core;
 mod env;
+mod git;
 mod providers;
 mod repository;
 mod tools;
@@ -80,9 +81,15 @@ async fn dispatch(cli: Cli) -> Result<()> {
             )
             .await?
         }
-        Command::Test => pending("test", 6, "test runner"),
-        Command::Improve { .. } => pending("improve", 8, "iteration engine"),
+        Command::Test => cmd_test(&repo_root)?,
+        // The improvement engine runs inside the engineering loop; the CLI
+        // command re-enters the same loop on the repository.
+        Command::Improve { task } => {
+            cmd_run(config_path.as_deref(), &repo_root, task, None, None).await?
+        }
         Command::Report { run_id } => cmd_report(&repo_root, run_id)?,
+        Command::Diff { run_id, full } => cmd_diff(&repo_root, run_id, full)?,
+        Command::History => cmd_history(&repo_root)?,
     }
     Ok(())
 }
@@ -351,49 +358,209 @@ fn print_run_summary(run: &Run, store: &RunStore) {
 
 fn cmd_report(repo_root: &Path, run_id: Option<String>) -> Result<()> {
     let store = RunStore::new(repo_root);
-    let id = match run_id {
-        Some(id) => id,
-        None => store
-            .latest_run_id()
-            .context("no runs found — execute a task first: forgeman run \"<task>\"")?
-            .context("no runs found — execute a task first: forgeman run \"<task>\"")?,
-    };
+    let id = resolve_run_id(&store, run_id)?;
     let run = store.load_run(&id)?;
 
-    println!("FORGEMAN ENGINEERING REPORT");
-    println!();
-    println!("Run          {}", run.id);
-    println!("Task         {}", run.task.description);
-    println!("Repository   {}", run.task.repo_root.display());
-    println!(
-        "Started      {}",
+    let report = build_report(&run, &store);
+    println!("{report}");
+
+    // Persist the human-readable report as evidence (spec §30).
+    let target = repo_root
+        .join(config::FORGEMAN_DIR)
+        .join("reports")
+        .join(format!("{id}.md"));
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, &report)?;
+    println!("Report saved to {}", target.display());
+    Ok(())
+}
+
+fn resolve_run_id(store: &RunStore, run_id: Option<String>) -> Result<String> {
+    match run_id {
+        Some(id) => Ok(id),
+        None => store
+            .latest_run_id()?
+            .context("no runs found — execute a task first: forgeman run \"<task>\""),
+    }
+}
+
+/// Assemble the human-readable engineering report (spec §30) from run
+/// evidence: baseline vs final tests, checkpoints, failures, tool usage.
+fn build_report(run: &Run, store: &RunStore) -> String {
+    let mut out = String::new();
+    out.push_str("FORGEMAN ENGINEERING REPORT\n\n");
+    out.push_str(&format!("Run          {}\n", run.id));
+    out.push_str(&format!("Task         {}\n", run.task.description));
+    out.push_str(&format!("Repository   {}\n", run.task.repo_root.display()));
+    out.push_str(&format!(
+        "Started      {}\n",
         run.started_at.format("%Y-%m-%d %H:%M:%S UTC")
-    );
-    println!("Duration     {}s", run.duration_secs());
-    println!("Status       {}", run.status);
-    println!();
-    println!("Iterations   {}", run.iterations.len());
+    ));
+    out.push_str(&format!("Duration     {}s\n", run.duration_secs()));
+    out.push_str(&format!("Status       {}\n\n", run.status));
+
+    out.push_str(&format!("Iterations   {}\n", run.iterations.len()));
+    if let Some(base) = &run.baseline_commit {
+        out.push_str(&format!("Baseline     commit {base}\n"));
+    }
+    let first_tests = run.iterations.iter().find_map(|i| i.tests.as_ref());
+    let last_tests = run.iterations.iter().rev().find_map(|i| i.tests.as_ref());
+    if let (Some(first), Some(last)) = (first_tests, last_tests) {
+        out.push_str(&format!(
+            "Tests        {} → {} / {}\n",
+            first.passed, last.passed, last.total
+        ));
+        if last.total > 0 {
+            let gain = (last.passed as f32 - first.passed as f32) / last.total as f32 * 100.0;
+            out.push_str(&format!("Improvement  {gain:+.1}% of total suite\n"));
+        }
+    }
+    out.push_str(&format!(
+        "Tools        {} invocation(s)\n",
+        run.tool_executions.len()
+    ));
+    out.push_str(&format!("Cost         ${:.4}\n\n", run.total_cost_usd));
+
     for iteration in &run.iterations {
         let tests = match &iteration.tests {
             Some(t) => format!("{}/{} passed", t.passed, t.total),
             None => "no test data".to_string(),
         };
-        println!("  #{}  tests: {}", iteration.index, tests);
+        out.push_str(&format!("  #{}  tests: {tests}", iteration.index));
+        if let Some(commit) = &iteration.git_commit {
+            out.push_str(&format!("  commit {commit}"));
+        }
+        out.push('\n');
         for failure in &iteration.failures {
-            println!("      ✗ [{}] {}", failure.stage, failure.message);
+            out.push_str(&format!(
+                "      ✗ [{}] {}\n",
+                failure.stage, failure.message
+            ));
+            if let Some(cause) = &failure.root_cause {
+                out.push_str(&format!("        root cause: {cause}\n"));
+            }
+            if let Some(action) = &failure.recommended_action {
+                out.push_str(&format!("        next action: {action}\n"));
+            }
         }
     }
-    println!();
-    println!("Evidence     {}", store.events_path(&id).display());
+
+    out.push_str(&format!(
+        "\nEvidence     {}\n",
+        store.events_path(&run.id).display()
+    ));
+    out
+}
+
+/// `forgeman test` — run the repository's validation suite directly.
+fn cmd_test(repo_root: &Path) -> Result<()> {
+    let commands = agents::test_runner::detect_commands(repo_root);
+    if commands.is_empty() {
+        anyhow::bail!("no test commands detected (supported ecosystems: cargo, npm, pytest)");
+    }
+
+    let timeout = std::time::Duration::from_secs(20 * 60);
+    let mut failed = false;
+    for command in &commands {
+        println!("▶ {} …", command.name);
+        let (ok, output, _code, duration_ms) =
+            agents::test_runner::run_command(repo_root, command, timeout)
+                .map_err(|err| anyhow::anyhow!("{command:?}: {err}"))?;
+        let summary = agents::test_runner::parse_summary(&command.name, &output, duration_ms);
+        let mark = if ok { "✓" } else { "✗" };
+        println!(
+            "  {mark} {}: {}/{} passed ({}ms)",
+            command.name, summary.passed, summary.total, summary.duration_ms
+        );
+        if !ok {
+            failed = true;
+            // Show the tail of the failing output for immediate feedback.
+            let tail: Vec<&str> = output.lines().rev().take(15).collect();
+            for line in tail.iter().rev() {
+                println!("    | {line}");
+            }
+        }
+    }
+    if failed {
+        std::process::exit(1);
+    }
     Ok(())
 }
 
-/// Stages that are specified but not built yet must fail gracefully and
-/// informatively, never silently pretend to work.
-fn pending(command: &str, phase: u8, component: &str) {
-    eprintln!(
-        "forgeman {command}: not implemented yet.\n  \
-         This capability ({component}) lands in Phase {phase} of the build roadmap."
-    );
-    std::process::exit(2);
+/// `forgeman diff` — what did a run change? (spec §22 minimum MVP)
+fn cmd_diff(repo_root: &Path, run_id: Option<String>, full: bool) -> Result<()> {
+    let store = RunStore::new(repo_root);
+    let id = resolve_run_id(&store, run_id)?;
+    let run = store.load_run(&id)?;
+
+    let Some(base) = run.baseline_commit.as_deref() else {
+        anyhow::bail!("run {id} has no baseline commit (repository not under git?)");
+    };
+    let head = git::current_commit(repo_root)
+        .map_err(anyhow::Error::msg)?
+        .unwrap_or_else(|| base.to_string());
+    if base == head {
+        println!("No changes between baseline {base} and HEAD {head}.");
+        return Ok(());
+    }
+
+    if full {
+        println!(
+            "{}",
+            git::diff_between(repo_root, base, &head).map_err(anyhow::Error::msg)?
+        );
+    } else {
+        let commits = git::commits_between(repo_root, base, &head).map_err(anyhow::Error::msg)?;
+        println!("Checkpoints ({base} → {head}):");
+        for commit in &commits {
+            println!("  {commit}");
+        }
+    }
+    Ok(())
+}
+
+/// `forgeman history` — every run and its checkpoints.
+fn cmd_history(repo_root: &Path) -> Result<()> {
+    let store = RunStore::new(repo_root);
+    let ids = store.list_run_ids()?;
+    if ids.is_empty() {
+        println!("No runs yet — start with: forgeman run \"<task>\"");
+        return Ok(());
+    }
+    for id in ids.iter().rev() {
+        let run = store.load_run(id)?;
+        let commits: Vec<&str> = run
+            .iterations
+            .iter()
+            .filter_map(|i| i.git_commit.as_deref())
+            .collect();
+        println!(
+            "{}  {}  status: {}",
+            run.id,
+            run.started_at.format("%Y-%m-%d %H:%M"),
+            run.status
+        );
+        println!(
+            "  task: {} | iterations: {}{}",
+            truncate(&run.task.description, 60),
+            run.iterations.len(),
+            if commits.is_empty() {
+                String::new()
+            } else {
+                format!(" | commits: {}", commits.join(", "))
+            }
+        );
+    }
+    Ok(())
+}
+
+fn truncate(text: &str, max: usize) -> String {
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        let cut: String = text.chars().take(max).collect();
+        format!("{cut}…")
+    }
 }

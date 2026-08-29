@@ -119,6 +119,9 @@ pub struct Run {
     /// Every tool invocation performed during the run (spec §36 audit log).
     #[serde(default)]
     pub tool_executions: Vec<ToolExecution>,
+    /// HEAD at run start — baseline for diffs and improvement stats (§22).
+    #[serde(default)]
+    pub baseline_commit: Option<String>,
 }
 
 /// Audit record for one tool invocation (file write, shell command, …).
@@ -146,6 +149,7 @@ impl Run {
             iterations: Vec::new(),
             total_cost_usd: 0.0,
             tool_executions: Vec::new(),
+            baseline_commit: None,
         }
     }
 

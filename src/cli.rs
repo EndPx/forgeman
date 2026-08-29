@@ -89,4 +89,17 @@ pub enum Command {
         #[arg(long)]
         run_id: Option<String>,
     },
+
+    /// Show the git diff a run produced (baseline → final checkpoint).
+    Diff {
+        /// Run id. Defaults to the most recent run.
+        #[arg(long)]
+        run_id: Option<String>,
+        /// Full diff instead of the stat summary.
+        #[arg(long)]
+        full: bool,
+    },
+
+    /// List runs and their per-iteration git checkpoints.
+    History,
 }

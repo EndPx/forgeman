@@ -99,6 +99,13 @@ impl Orchestrator {
         ));
         sinks.record(&Event::now(&ctx.run.id, None, EventKind::RunStarted));
 
+        // Capture the baseline for diffs and improvement stats (spec §22).
+        if crate::git::is_repo(&ctx.task.repo_root)
+            && let Ok(Some(hash)) = crate::git::current_commit(&ctx.task.repo_root)
+        {
+            ctx.run.baseline_commit = Some(hash);
+        }
+
         // Fail fast when required stages are not registered yet.
         let missing: Vec<StageName> = PREAMBLE
             .into_iter()
@@ -183,6 +190,28 @@ impl Orchestrator {
                 && let Err(reason) = self.run_stage(StageName::Diagnose, &mut ctx, sinks).await
             {
                 break RunStatus::Failed { reason };
+            }
+
+            // Checkpoint the iteration as a git commit (spec §22). Failures
+            // to checkpoint never abort the run — they are degraded evidence.
+            if crate::git::is_repo(&ctx.task.repo_root) {
+                let tests_note = tests
+                    .as_ref()
+                    .map(|t| format!("{}/{}", t.passed, t.total))
+                    .unwrap_or_else(|| "n/a".to_string());
+                let message = format!("forgeman: iteration {index} — tests {tests_note}");
+                match crate::git::commit_all(&ctx.task.repo_root, &message) {
+                    Ok(Some(hash)) => {
+                        if let Some(iteration) = ctx.current_iteration_mut() {
+                            iteration.git_commit = Some(hash.clone());
+                        }
+                        ctx.defer_event(EventKind::DecisionCreated {
+                            summary: format!("git checkpoint {hash} ({tests_note})"),
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(err) => eprintln!("warning: git checkpoint failed: {err}"),
+                }
             }
 
             sinks.record(&Event::now(
@@ -441,10 +470,15 @@ mod tests {
     }
 
     fn make_task() -> Task {
+        // A unique non-existent path outside this repository: the orchestrator
+        // checkpoints to git when repo_root is a real git repo, and tests must
+        // never touch the developer's working tree (learned the hard way).
+        let repo_root =
+            std::env::temp_dir().join(format!("forgeman-test-{}", uuid::Uuid::new_v4()));
         Task {
             id: new_task_id(),
             description: "Fix the authentication bug".into(),
-            repo_root: PathBuf::from("."),
+            repo_root,
             created_at: Utc::now(),
         }
     }
