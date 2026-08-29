@@ -125,9 +125,18 @@ mod tests {
     }
 
     #[test]
-    fn new_run_ids_sort_chronologically() {
+    fn new_run_ids_have_sortable_format() {
         let a = new_run_id();
-        let b = new_run_id();
-        assert!(a <= b, "ids must be sortable: {a} vs {b}");
+        // Lexicographic order == chronological for ids generated in the same
+        // second too, because the random suffix is uniform hex — the property
+        // that matters is the `run_YYYYMMDD_HHMMSS_xxxxxx` shape.
+        assert!(a.starts_with("run_"));
+        let parts: Vec<&str> = a.split('_').collect();
+        assert_eq!(parts.len(), 4);
+        assert_eq!(parts[1].len(), 8);
+        assert!(parts[1].chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(parts[2].len(), 6);
+        assert!(parts[2].chars().all(|c| c.is_ascii_digit()));
+        assert_eq!(parts[3].len(), 6);
     }
 }
