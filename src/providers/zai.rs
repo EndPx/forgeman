@@ -105,15 +105,27 @@ impl AgentProvider for ZaiProvider {
             });
 
             let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-            let response = self
-                .client
-                .post(&url)
-                .bearer_auth(api_key)
-                .header("accept", "application/json")
-                .json(&body)
-                .send()
-                .await
-                .map_err(|err| ProviderError::Request(err.to_string()))?;
+            // Free tier occasionally returns 429 (overloaded). Retry with a
+            // short bounded backoff instead of burning an orchestrator attempt.
+            let mut attempt = 0u32;
+            let response = loop {
+                attempt += 1;
+                let response = self
+                    .client
+                    .post(&url)
+                    .bearer_auth(api_key)
+                    .header("accept", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|err| ProviderError::Request(err.to_string()))?;
+                if response.status().as_u16() == 429 && attempt < 3 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2 * u64::from(attempt)))
+                        .await;
+                    continue;
+                }
+                break response;
+            };
 
             let status = response.status();
             let raw = response

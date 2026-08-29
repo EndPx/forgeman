@@ -49,8 +49,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
             println!("  Review execution/budget limits, then run: forgeman run \"<task>\"");
         }
         Command::Inspect => cmd_inspect(&repo_root)?,
-        Command::Analyze { .. } => pending("analyze", 4, "task analyzer"),
-        Command::Plan { .. } => pending("plan", 4, "planner"),
+        Command::Analyze { task } => cmd_analyze(config_path.as_deref(), &repo_root, &task).await?,
+        Command::Plan { task } => cmd_plan(config_path.as_deref(), &repo_root, &task).await?,
         Command::Run {
             task,
             max_iterations,
@@ -63,7 +63,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 max_iterations,
                 timeout_minutes,
             )
-            .await
+            .await?
         }
         Command::Solve {
             task,
@@ -77,7 +77,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 max_iterations,
                 timeout_minutes,
             )
-            .await
+            .await?
         }
         Command::Test => pending("test", 6, "test runner"),
         Command::Improve { .. } => pending("improve", 8, "iteration engine"),
@@ -92,7 +92,7 @@ async fn cmd_run(
     task_description: String,
     max_iterations: Option<u32>,
     timeout_minutes: Option<u64>,
-) {
+) -> Result<()> {
     let mut config = Config::load(config_path, repo_root).expect("configuration is valid");
     if let Some(max) = max_iterations {
         config.execution.max_iterations = max;
@@ -124,7 +124,7 @@ async fn cmd_run(
     ]);
 
     // Phases 2–8 register the real engineering stages here as they land.
-    let registry = build_registry(&config);
+    let registry = build_registry(&config)?;
     let orchestrator = Orchestrator::new(registry);
 
     let run = orchestrator.execute_run(task, config, &store, &sinks).await;
@@ -138,13 +138,114 @@ async fn cmd_run(
     std::process::exit(code);
 }
 
-fn build_registry(_config: &Config) -> StageRegistry {
+fn build_registry(config: &Config) -> Result<StageRegistry> {
+    let provider: Arc<dyn providers::AgentProvider> = Arc::from(providers::build(&config.agent)?);
     let mut registry = StageRegistry::new();
     // Phase 2: repository explorer.
     registry.register(Arc::new(agents::inspect::InspectStage));
-    // Phases 3–8: analyzer, planner, coder, test runner, diagnoser,
-    // improver, verifier — registered as they land.
-    registry
+    // Phase 4: analyzer + planner (LLM-backed).
+    registry.register(Arc::new(agents::analyze::AnalyzeStage {
+        provider: provider.clone(),
+    }));
+    registry.register(Arc::new(agents::plan::PlanStage { provider }));
+    // Phases 5–8: coder, test runner, diagnoser, improver, verifier —
+    // registered as they land.
+    Ok(registry)
+}
+
+async fn cmd_analyze(config_path: Option<&Path>, repo_root: &Path, task: &str) -> Result<()> {
+    let config = Config::load(config_path, repo_root)?;
+    let provider = providers::build(&config.agent)?;
+    let profile = repository::inspector::inspect(repo_root)?;
+
+    println!(
+        "Analyzing with {} ({}) …",
+        config.agent.provider, config.agent.model
+    );
+    let (analysis, response) =
+        agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task)
+            .await
+            .map_err(|err| anyhow::anyhow!("analysis failed: {err}"))?;
+
+    println!();
+    println!("TASK ANALYSIS");
+    println!("  Goal       {}", analysis.goal);
+    print_list("  Components ", &analysis.affected_components);
+    print_list("  Constraints", &analysis.constraints);
+    print_list("  Risks      ", &analysis.risks);
+    print_list("  Edge cases ", &analysis.edge_cases);
+    print_list("  Ambiguities", &analysis.ambiguities);
+    println!(
+        "  [{} tok in / {} tok out, ${:.4}]",
+        response.input_tokens, response.output_tokens, response.cost_usd
+    );
+
+    persist_json(
+        repo_root,
+        "task-analysis.json",
+        &serde_json::to_value(&analysis)?,
+    )?;
+    Ok(())
+}
+
+async fn cmd_plan(config_path: Option<&Path>, repo_root: &Path, task: &str) -> Result<()> {
+    let config = Config::load(config_path, repo_root)?;
+    let provider = providers::build(&config.agent)?;
+    let profile = repository::inspector::inspect(repo_root)?;
+
+    println!(
+        "Planning with {} ({}) …",
+        config.agent.provider, config.agent.model
+    );
+    let (analysis, _) = agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task)
+        .await
+        .map_err(|err| anyhow::anyhow!("analysis failed: {err}"))?;
+    let (plan, response) =
+        agents::plan::build_plan(provider.as_ref(), &profile.summary(), &analysis)
+            .await
+            .map_err(|err| anyhow::anyhow!("planning failed: {err}"))?;
+
+    println!();
+    println!("IMPLEMENTATION PLAN");
+    println!("  Strategy   {}", plan.summary);
+    for (index, step) in plan.steps.iter().enumerate() {
+        println!("  [{}] {}", index + 1, step.description);
+        if !step.affected_files.is_empty() {
+            println!("       files: {}", step.affected_files.join(", "));
+        }
+    }
+    println!("  Validation:");
+    for criterion in &plan.validation_criteria {
+        println!("    - {criterion}");
+    }
+    if !plan.rollback.is_empty() {
+        println!("  Rollback   {}", plan.rollback);
+    }
+    println!(
+        "  [{} tok in / {} tok out, ${:.4}]",
+        response.input_tokens, response.output_tokens, response.cost_usd
+    );
+
+    persist_json(repo_root, "plan.json", &serde_json::to_value(&plan)?)?;
+    Ok(())
+}
+
+fn print_list(label: &str, items: &[String]) {
+    if items.is_empty() {
+        return;
+    }
+    println!("{label} {}", items.join("; "));
+}
+
+fn persist_json(repo_root: &Path, filename: &str, value: &serde_json::Value) -> Result<()> {
+    let target = repo_root.join(config::FORGEMAN_DIR).join(filename);
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&target, serde_json::to_string_pretty(value)?)?;
+    println!();
+    println!("  Saved to {}", target.display());
+    Ok(())
 }
 
 fn cmd_inspect(repo_root: &Path) -> Result<()> {
