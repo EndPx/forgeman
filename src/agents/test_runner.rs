@@ -73,15 +73,44 @@ pub fn detect_commands(repo_root: &Path) -> Vec<TestCommand> {
     let has_python_tests = repo_root.join("tests").is_dir()
         || repo_root.join("pytest.ini").exists()
         || repo_root.join("pyproject.toml").exists();
-    if has_python_tests && python_test_available() {
-        commands.push(TestCommand {
-            name: "pytest".to_string(),
-            program: "python".to_string(),
-            args: vec!["-m".to_string(), "pytest".to_string(), "-q".to_string()],
-        });
+    if has_python_tests {
+        if python_test_available() {
+            commands.push(TestCommand {
+                name: "pytest".to_string(),
+                program: "python".to_string(),
+                args: vec!["-m".to_string(), "pytest".to_string(), "-q".to_string()],
+            });
+        } else if has_unittest_tests(repo_root) {
+            // stdlib fallback: no pytest installed, but tests/ holds
+            // unittest-style test_*.py files.
+            commands.push(TestCommand {
+                name: "unittest".to_string(),
+                program: "python".to_string(),
+                args: vec![
+                    "-m".to_string(),
+                    "unittest".to_string(),
+                    "discover".to_string(),
+                    "-s".to_string(),
+                    "tests".to_string(),
+                    "-t".to_string(),
+                    ".".to_string(),
+                ],
+            });
+        }
     }
 
     commands
+}
+
+fn has_unittest_tests(repo_root: &Path) -> bool {
+    std::fs::read_dir(repo_root.join("tests"))
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                let name = entry.file_name().to_string_lossy().to_string();
+                name.starts_with("test_") && name.ends_with(".py")
+            })
+        })
+        .unwrap_or(false)
 }
 
 fn python_test_available() -> bool {
@@ -233,6 +262,74 @@ pub fn parse_summary(name: &str, output: &str, duration_ms: u64) -> TestSummary 
             summary.failed += grab_number(line, "failed");
         }
     }
+    if summary.passed + summary.failed > 0 {
+        summary.total = summary.passed + summary.failed;
+        return summary;
+    }
+
+    // node:test TAP reporter: "# tests 5", "# pass 4", "# fail 1"
+    let mut tap_total: Option<u32> = None;
+    let mut tap_pass: Option<u32> = None;
+    let mut tap_fail: Option<u32> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("# ") {
+            let mut parts = rest.split_whitespace();
+            if let (Some(word), Some(number)) = (parts.next(), parts.next())
+                && let Ok(value) = number.parse::<u32>()
+            {
+                match word {
+                    "tests" => tap_total = Some(value),
+                    "pass" => tap_pass = Some(value),
+                    "fail" => tap_fail = Some(value),
+                    _ => {}
+                }
+            }
+        }
+    }
+    if let Some(total) = tap_total {
+        summary.total = total;
+        summary.passed = tap_pass.unwrap_or(total);
+        summary.failed = tap_fail.unwrap_or(0);
+        return summary;
+    }
+
+    // python unittest: "Ran 3 tests in 0.001s" + "OK" | "FAILED (failures=1, errors=1)"
+    let mut unittest_total: Option<u32> = None;
+    for line in output.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("Ran ") {
+            let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if rest.contains("tests")
+                && let Ok(value) = digits.parse::<u32>()
+            {
+                unittest_total = Some(value);
+            }
+        }
+    }
+    if let Some(total) = unittest_total {
+        summary.total = total;
+        let mut failed = 0u32;
+        for line in output.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("FAILED (failures=") {
+                let failure_digits: String =
+                    rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                failed += failure_digits.parse::<u32>().unwrap_or(0);
+                if let Some(errors_at) = rest.find("errors=") {
+                    let error_digits: String = rest[errors_at + "errors=".len()..]
+                        .chars()
+                        .take_while(|c| c.is_ascii_digit())
+                        .collect();
+                    failed += error_digits.parse::<u32>().unwrap_or(0);
+                }
+            }
+        }
+        summary.failed = failed;
+        summary.passed = total.saturating_sub(failed);
+        return summary;
+    }
+
     summary.total = summary.passed + summary.failed;
     summary
 }
@@ -399,6 +496,42 @@ mod tests {
         let tmp2 = tempfile::tempdir().unwrap();
         std::fs::write(tmp2.path().join("package.json"), r#"{ "name": "x" }"#).unwrap();
         assert!(detect_commands(tmp2.path()).is_empty());
+    }
+
+    #[test]
+    fn parses_node_tap_output() {
+        let output = "# Subtest: discount
+# tests 3
+# pass 2
+# fail 1
+";
+        let summary = parse_summary("npm-test", output, 400);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.passed, 2);
+        assert_eq!(summary.failed, 1);
+    }
+
+    #[test]
+    fn parses_unittest_output() {
+        let output = "Ran 3 tests in 0.001s
+
+FAILED (failures=1, errors=1)
+";
+        let summary = parse_summary("unittest", output, 300);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.failed, 2);
+        assert_eq!(summary.passed, 1);
+    }
+
+    #[test]
+    fn parses_unittest_ok_output() {
+        let output = "Ran 4 tests in 0.002s
+
+OK
+";
+        let summary = parse_summary("unittest", output, 250);
+        assert_eq!(summary.total, 4);
+        assert!(summary.all_passed());
     }
 
     #[tokio::test]

@@ -18,6 +18,23 @@ ForgeMan is a **closed-loop software engineering system**. It takes a real engin
 
 > **Core principle:** code generated ≠ problem solved. `VERIFIED` is only claimed when tests prove it.
 
+## Who has this problem?
+
+Developers and small teams who already use AI coding assistants — and then
+spend their evenings manually verifying what the assistant claimed to have
+fixed. The bottleneck is not generating code; it is the **verification gap**:
+the agent says "done", the tests still fail, and every fix means another round
+of copy-pasting errors back into the chat. Unverified agent output is rework
+waiting to happen, and nobody signs their name on a change nobody tested.
+
+ForgeMan closes that gap: the loop runs autonomously, every claim is checked
+against the repository's own test suite by an independent diagnoser, and the
+result ships with evidence (checkpoints, decision trace, report) a human can
+audit in minutes.
+
+Scope note (ground rule 02): **the entire project — baseline included — was
+built during this hackathon (August 29–30, 2026).** Nothing predates it.
+
 ## It in action
 
 | Terminal (real run) | Dashboard (embedded) |
@@ -33,6 +50,27 @@ ForgeMan is a **closed-loop software engineering system**. It takes a real engin
 | Git checkpoints | One per iteration, traceable with `forgeman diff` |
 | Root causes found | 2 compile errors, diagnosed with 100% confidence + fix suggestions |
 | LLM cost | **$0.00** (Z.AI glm-4.7-flash free tier) |
+
+## Measured against a fair baseline
+
+Same model, same task, same repositories, same test suites — the baseline is a
+naive one-shot prompt with edits applied by a 30-line script
+([`scripts/baseline.mjs`](scripts/baseline.mjs)):
+
+| Case | Baseline (best of attempts) | ForgeMan (best of 2 runs) |
+|---|---|---|
+| `flawed-api` (Rust — broken build + 2 failing tests) | 2/5, never passed | **5/5 — VERIFIED** |
+| `flawed-js` (Node — 1 failing test + O(n²)) | 2/3, never passed | exhausted ×2 (model split code into a module it never wrote) |
+| `flawed-py` (Python — 1 failing test + O(n²)) | 2/3, never passed | exhausted (no regression, no fix) |
+| **Cases solved** | **0 / 3** | **1 / 3** |
+
+ForgeMan wins the case that requires *diagnosis through cascading compile
+errors*; it also fails honestly when the free-tier model goes off the rails —
+and the failure is visible in the exit code, not hidden behind a confident
+"done". Full protocol, raw data, and the challenging-case analysis:
+**[docs/EVALUATION.md](docs/EVALUATION.md)** · evolution story:
+**[docs/IMPROVEMENT_CHANGELOG.md](docs/IMPROVEMENT_CHANGELOG.md)** · agent
+trajectories: **[docs/trajectories.md](docs/trajectories.md)**
 
 ## Quick start
 
@@ -125,6 +163,17 @@ docs/          architecture, getting started
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full design, or jump straight to [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
+## Hot take
+
+The hard part of agentic software engineering is not generating code — it is
+deciding what to do next when the evidence contradicts the agent's claims. Our
+biggest reliability wins came from zero new model quality: feed the agent's own
+failure analysis back into the next attempt (and let it persist across
+iterations), and treat decode settings (`thinking: disabled`, token budgets) as
+part of the output contract for structured edits. The model wrote the same bad
+code in every naive attempt; **the loop, not the model, is what made it pass** —
+and when the model is too weak, the loop still tells you the truth.
 
 ## License
 

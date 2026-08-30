@@ -41,6 +41,20 @@ pub fn default_image_for_ecosystem(repo_root: &Path) -> Option<&'static str> {
     }
 }
 
+/// Build a host command, translating npm/npx (which are `.cmd` shims) into
+/// `cmd /C` on Windows — CreateProcess cannot execute them directly.
+pub fn build_host_command(program: &str, args: &[String], repo_root: &Path) -> Command {
+    let needs_cmd = cfg!(windows) && matches!(program, "npm" | "npx" | "yarn" | "pnpm");
+    if needs_cmd {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C").arg(program).args(args).current_dir(repo_root);
+        return cmd;
+    }
+    let mut cmd = Command::new(program);
+    cmd.args(args).current_dir(repo_root);
+    cmd
+}
+
 /// Pure builder for the docker argument vector (unit-testable).
 pub fn docker_args(
     image: &str,
@@ -86,8 +100,7 @@ pub fn prepare(
     docker_available: bool,
 ) -> Result<Command, String> {
     if !sandbox.enabled {
-        let mut cmd = Command::new(&command.program);
-        cmd.args(&command.args).current_dir(repo_root);
+        let cmd = build_host_command(&command.program, &command.args, repo_root);
         return Ok(cmd);
     }
 

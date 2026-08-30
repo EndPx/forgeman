@@ -1,0 +1,4 @@
+.env
+.forgeman/
+node_modules/
+target/

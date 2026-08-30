@@ -1,0 +1,64 @@
+[
+  {
+    "case": "flawed-api",
+    "test_kind": "cargo",
+    "attempts": [],
+    "any_pass": false
+  },
+  {
+    "case": "flawed-js",
+    "test_kind": "npm",
+    "attempts": [
+      {
+        "attempt": 1,
+        "llm_ms": 125848,
+        "edits_applied": 0,
+        "tests_ok": false,
+        "tests": {
+          "total": 3,
+          "passed": 1,
+          "failed": 2
+        },
+        "note": "LLM output contained no parsable JSON",
+        "output_tail": "# pass 1 | # fail 2 | # cancelled 0 | # skipped 0 | # todo 0 | # duration_ms 134.6839"
+      },
+      {
+        "attempt": 2,
+        "llm_ms": 133518,
+        "edits_applied": 0,
+        "tests_ok": false,
+        "tests": {
+          "total": 3,
+          "passed": 1,
+          "failed": 2
+        },
+        "note": "LLM output contained no parsable JSON",
+        "output_tail": "# pass 1 | # fail 2 | # cancelled 0 | # skipped 0 | # todo 0 | # duration_ms 135.9819"
+      }
+    ],
+    "any_pass": false
+  },
+  {
+    "case": "flawed-py",
+    "test_kind": "unittest",
+    "attempts": [
+      {
+        "attempt": 1,
+        "llm_ms": 70035,
+        "edits_applied": 1,
+        "tests_ok": false,
+        "tests": {
+          "total": 3,
+          "passed": 0,
+          "failed": 30
+        },
+        "output_tail": "+ ['a', 'b']\r | \r | ----------------------------------------------------------------------\r | Ran 3 tests in 0.002s\r | \r | FAILED (failures=3)\r"
+      },
+      {
+        "attempt": 2,
+        "error": "LLM 429: {\"error\":{\"code\":\"1305\",\"message\":\"The service may be temporarily overloaded, please try again later\"}}"
+      }
+    ],
+    "any_pass": false
+  }
+]
