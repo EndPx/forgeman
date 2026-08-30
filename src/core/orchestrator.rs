@@ -58,6 +58,15 @@ const LOOP_REQUIRED: [StageName; 4] = [
     StageName::Diagnose,
     StageName::Improve,
 ];
+/// How many times a rate-limited stage may pause-and-retry its full attempt
+/// round before escalating. Infra pauses never consume the iteration budget.
+const INFRA_PAUSE_ROUNDS: u32 = 2;
+
+fn is_transient_rate_limit(message: &str) -> bool {
+    let lower = message.to_lowercase();
+    lower.contains("429") || lower.contains("too many requests") || lower.contains("rate limit")
+}
+
 /// Artifacts scoped to a single iteration; cleared when a new one starts.
 ///  deliberately persists — the Improve stage in the next
 /// iteration must read the previous iteration's diagnosis.
@@ -86,11 +95,15 @@ impl Orchestrator {
         &self,
         task: Task,
         config: Config,
+        auto_approve: bool,
+        model_upgrade: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         store: &RunStore,
         sinks: &dyn EventSink,
     ) -> Run {
         let run = Run::starting(task.clone(), config.clone());
         let mut ctx = RunContext::new(config, task, run);
+        ctx.auto_approve = auto_approve;
+        ctx.model_upgrade = model_upgrade;
 
         sinks.record(&Event::now(
             &ctx.run.id,
@@ -142,11 +155,38 @@ impl Orchestrator {
             }
         }
 
+        // Human approval gate (spec §24): high-impact plans need explicit
+        // consent before any code is written.
+        if let Err(status) = self.approval_gate(&mut ctx, sinks).await {
+            self.finish(&mut ctx, status, store, sinks).await;
+            return ctx.run;
+        }
+
         let deadline = Instant::now() + ctx.config.timeout();
         let mut index: u32 = 0;
         let mut final_status = loop {
             if Instant::now() >= deadline {
                 break RunStatus::TimedOut;
+            }
+
+            // Tiered fallback (spec §13): once the first iteration failed to
+            // verify, later improve/diagnose calls upgrade to the configured
+            // fallback model — with zero user intervention.
+            if index >= 1
+                && let Some(flag) = &ctx.model_upgrade
+                && !flag.load(std::sync::atomic::Ordering::Relaxed)
+                && let Some(fallback) = &ctx.config.agent.fallback_model
+            {
+                flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                sinks.record(&Event::now(
+                    &ctx.run.id,
+                    Some(index),
+                    EventKind::DecisionCreated {
+                        summary: format!(
+                            "iteration 0 not verified — upgrading model to `{fallback}` for improve/diagnose"
+                        ),
+                    },
+                ));
             }
 
             // Iteration-scoped artifacts reset every loop; preamble artifacts
@@ -256,6 +296,9 @@ impl Orchestrator {
 
     /// Run one stage with bounded retries (spec: no infinite retry).
     /// `Blocked` errors are non-retryable and escalate immediately.
+    /// Persistent provider rate limits (429) trigger up to
+    /// `INFRA_PAUSE_ROUNDS` cooldown pauses — an infrastructure pause never
+    /// consumes the stage's engineering attempts or the iteration budget.
     async fn run_stage(
         &self,
         name: StageName,
@@ -270,91 +313,117 @@ impl Orchestrator {
         let max_attempts = ctx.config.execution.max_stage_attempts;
         let mut last_error = String::new();
         let mut total_duration_ms: u64 = 0;
-        let mut attempts_used: u32 = 0;
+        let mut total_attempts: u32 = 0;
+        let mut infra_round = 0u32;
 
-        for attempt in 1..=max_attempts {
-            attempts_used = attempt;
-            let iter_index = ctx.current_iteration_index();
-            sinks.record(&Event::now(
-                &ctx.run.id,
-                iter_index,
-                EventKind::StageStarted { stage: name },
-            ));
-            let started = Instant::now();
+        'infra: loop {
+            let mut round_was_infra = false;
+            'attempts: for _ in 1..=max_attempts {
+                total_attempts += 1;
+                let attempt = total_attempts;
+                let iter_index = ctx.current_iteration_index();
+                sinks.record(&Event::now(
+                    &ctx.run.id,
+                    iter_index,
+                    EventKind::StageStarted { stage: name },
+                ));
+                let started = Instant::now();
 
-            match stage.execute(ctx).await {
-                Ok(output) => {
-                    let duration_ms = started.elapsed().as_millis() as u64;
-                    for (key, value) in output.artifacts {
-                        ctx.put_artifact(key, value);
-                    }
-                    // Flush stage-deferred events (tool executions, …).
-                    for kind in ctx.event_buffer.drain(..) {
-                        sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
-                    }
-                    ctx.push_stage_result(StageResult {
-                        stage: name,
-                        status: StageStatus::Success,
-                        attempts: attempt,
-                        duration_ms,
-                        detail: output.detail,
-                    });
-                    sinks.record(&Event::now(
-                        &ctx.run.id,
-                        iter_index,
-                        EventKind::StageCompleted {
+                match stage.execute(ctx).await {
+                    Ok(output) => {
+                        let duration_ms = started.elapsed().as_millis() as u64;
+                        for (key, value) in output.artifacts {
+                            ctx.put_artifact(key, value);
+                        }
+                        // Flush stage-deferred events (tool executions, …).
+                        for kind in ctx.event_buffer.drain(..) {
+                            sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
+                        }
+                        ctx.push_stage_result(StageResult {
                             stage: name,
                             status: StageStatus::Success,
                             attempts: attempt,
                             duration_ms,
-                        },
-                    ));
-                    return Ok(());
-                }
-                Err(err) => {
-                    let duration_ms = started.elapsed().as_millis() as u64;
-                    total_duration_ms += duration_ms;
-                    let message = err.to_string();
-                    let status = if err.is_retryable() {
-                        StageStatus::Failed
-                    } else {
-                        StageStatus::Escalated
-                    };
-                    for kind in ctx.event_buffer.drain(..) {
-                        sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
+                            detail: output.detail,
+                        });
+                        sinks.record(&Event::now(
+                            &ctx.run.id,
+                            iter_index,
+                            EventKind::StageCompleted {
+                                stage: name,
+                                status: StageStatus::Success,
+                                attempts: attempt,
+                                duration_ms,
+                            },
+                        ));
+                        return Ok(());
                     }
-                    sinks.record(&Event::now(
-                        &ctx.run.id,
-                        iter_index,
-                        EventKind::FailureDetected {
+                    Err(err) => {
+                        let duration_ms = started.elapsed().as_millis() as u64;
+                        total_duration_ms += duration_ms;
+                        let message = err.to_string();
+                        let status = if err.is_retryable() {
+                            StageStatus::Failed
+                        } else {
+                            StageStatus::Escalated
+                        };
+                        for kind in ctx.event_buffer.drain(..) {
+                            sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
+                        }
+                        sinks.record(&Event::now(
+                            &ctx.run.id,
+                            iter_index,
+                            EventKind::FailureDetected {
+                                stage: name,
+                                message: message.clone(),
+                                attempt,
+                            },
+                        ));
+                        sinks.record(&Event::now(
+                            &ctx.run.id,
+                            iter_index,
+                            EventKind::StageCompleted {
+                                stage: name,
+                                status,
+                                attempts: attempt,
+                                duration_ms,
+                            },
+                        ));
+                        ctx.record_failure(FailureRecord {
                             stage: name,
                             message: message.clone(),
-                            attempt,
-                        },
-                    ));
-                    sinks.record(&Event::now(
-                        &ctx.run.id,
-                        iter_index,
-                        EventKind::StageCompleted {
-                            stage: name,
-                            status,
-                            attempts: attempt,
-                            duration_ms,
-                        },
-                    ));
-                    ctx.record_failure(FailureRecord {
-                        stage: name,
-                        message: message.clone(),
-                        root_cause: None,
-                        confidence: None,
-                        recommended_action: None,
-                    });
-                    last_error = message;
-                    if !err.is_retryable() {
-                        break;
+                            root_cause: None,
+                            confidence: None,
+                            recommended_action: None,
+                        });
+                        last_error = message.clone();
+                        round_was_infra = is_transient_rate_limit(&message);
+                        if !err.is_retryable() {
+                            break 'attempts;
+                        }
                     }
                 }
             }
+
+            // Infra pause: pure provider rate limiting is not an engineering
+            // failure — cool down and retry the whole attempt round instead
+            // of escalating, bounded so a dead provider still ends the run.
+            if round_was_infra && infra_round < INFRA_PAUSE_ROUNDS {
+                infra_round += 1;
+                let pause = ctx.config.execution.infra_pause_seconds;
+                sinks.record(&Event::now(
+                    &ctx.run.id,
+                    ctx.current_iteration_index(),
+                    EventKind::DecisionCreated {
+                        summary: format!(
+                            "rate-limited by provider — pausing {pause}s before retrying `{name}` (infra pause {infra_round}/{INFRA_PAUSE_ROUNDS})"
+                        ),
+                    },
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(pause)).await;
+                continue 'infra;
+            }
+            break 'infra;
         }
 
         // Record the escalated outcome so iterations always show what happened,
@@ -362,13 +431,18 @@ impl Orchestrator {
         ctx.push_stage_result(StageResult {
             stage: name,
             status: StageStatus::Escalated,
-            attempts: max_attempts,
+            attempts: total_attempts,
             duration_ms: total_duration_ms,
             detail: Some(last_error.clone()),
         });
 
+        let rounds_note = if infra_round > 0 {
+            format!(" after {infra_round} infra pause(s)")
+        } else {
+            String::new()
+        };
         Err(format!(
-            "unable to automatically resolve stage `{name}` after {attempts_used} attempt(s). Last error: {last_error}"
+            "unable to automatically resolve stage `{name}` after {total_attempts} attempt(s){rounds_note}. Last error: {last_error}"
         ))
     }
 
@@ -389,6 +463,125 @@ impl Orchestrator {
         if let Err(err) = store.save_run(&ctx.run) {
             eprintln!("warning: failed to persist run record: {err:#}");
         }
+    }
+
+    /// Spec §24 human-approval gate: high-impact plans (CI, dependency
+    /// manifests, lockfiles, migrations, containers, or very broad changes)
+    /// require explicit consent before code is written.
+    async fn approval_gate(
+        &self,
+        ctx: &mut RunContext,
+        sinks: &dyn EventSink,
+    ) -> Result<(), RunStatus> {
+        let Some(plan) = ctx.artifact_as::<crate::core::model::ImplementationPlan>("plan") else {
+            return Ok(());
+        };
+        let files: Vec<String> = plan
+            .steps
+            .iter()
+            .flat_map(|step| step.affected_files.clone())
+            .collect();
+        let Impact::High(reasons) = classify_impact(&files) else {
+            return Ok(());
+        };
+
+        if ctx.auto_approve {
+            sinks.record(&Event::now(
+                &ctx.run.id,
+                None,
+                EventKind::DecisionCreated {
+                    summary: format!(
+                        "high-impact plan auto-approved (--yes): {}",
+                        reasons.join("; ")
+                    ),
+                },
+            ));
+            return Ok(());
+        }
+
+        if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            println!();
+            println!("HIGH IMPACT CHANGE");
+            for reason in &reasons {
+                println!("  - {reason}");
+            }
+            println!("Files planned: {}", files.join(", "));
+            print!("Approve? [y/N] ");
+            use std::io::Write as _;
+            let _ = std::io::stdout().flush();
+            let mut answer = String::new();
+            let _ = std::io::stdin().read_line(&mut answer);
+            let approved = matches!(answer.trim().to_lowercase().as_str(), "y" | "yes");
+            sinks.record(&Event::now(
+                &ctx.run.id,
+                None,
+                EventKind::DecisionCreated {
+                    summary: format!(
+                        "high-impact plan {} by human review ({})",
+                        if approved { "approved" } else { "rejected" },
+                        reasons.join("; ")
+                    ),
+                },
+            ));
+            if approved {
+                return Ok(());
+            }
+            Err(RunStatus::Aborted {
+                reason: "high-impact change rejected by human review".to_string(),
+            })
+        } else {
+            Err(RunStatus::Aborted {
+                reason: format!(
+                    "plan touches high-impact files ({}) — re-run with --yes to approve, or restrict the plan",
+                    reasons.join("; ")
+                ),
+            })
+        }
+    }
+}
+
+/// Consequence classification for the approval gate (spec §24).
+#[derive(Debug, PartialEq)]
+enum Impact {
+    Routine,
+    High(Vec<String>),
+}
+
+fn classify_impact(files: &[String]) -> Impact {
+    let mut reasons: Vec<String> = Vec::new();
+    let mut high = false;
+    for file in files {
+        let lower = file.to_lowercase();
+        let mut flag = |reason: &str| {
+            if !reasons.iter().any(|existing| existing == reason) {
+                reasons.push(reason.to_string());
+            }
+            high = true;
+        };
+        if lower.contains(".github/") || lower.contains(".gitlab/") {
+            flag("touches CI/CD configuration");
+        }
+        if lower.ends_with("cargo.toml") || lower.ends_with("package.json") {
+            flag("modifies dependency manifests");
+        }
+        if lower.ends_with(".lock") {
+            flag("modifies lockfiles");
+        }
+        if lower.contains("migration") {
+            flag("touches database migrations");
+        }
+        if lower.contains("dockerfile") || lower.contains("docker-compose") {
+            flag("modifies container definitions");
+        }
+    }
+    if files.len() > 8 {
+        reasons.push(format!("{} files affected (broad change)", files.len()));
+        high = true;
+    }
+    if high {
+        Impact::High(reasons)
+    } else {
+        Impact::Routine
     }
 }
 
@@ -509,7 +702,7 @@ mod tests {
         let sink = CollectedSink::default();
 
         let run = orch
-            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .execute_run(make_task(), config_with(5, 3), true, None, &store, &sink)
             .await;
 
         assert_eq!(run.status, RunStatus::Verified);
@@ -535,7 +728,7 @@ mod tests {
         let sink = CollectedSink::default();
 
         let run = orch
-            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .execute_run(make_task(), config_with(5, 3), true, None, &store, &sink)
             .await;
 
         assert_eq!(run.status, RunStatus::Verified);
@@ -557,6 +750,8 @@ mod tests {
             .execute_run(
                 make_task(),
                 config_with(2, 3),
+                true,
+                None,
                 &store,
                 &CollectedSink::default(),
             )
@@ -574,7 +769,7 @@ mod tests {
         let sink = CollectedSink::default();
 
         let run = orch
-            .execute_run(make_task(), config_with(5, 3), &store, &sink)
+            .execute_run(make_task(), config_with(5, 3), true, None, &store, &sink)
             .await;
 
         match &run.status {
@@ -610,7 +805,7 @@ mod tests {
         let sink = CollectedSink::default();
 
         let run = orch
-            .execute_run(make_task(), config_with(5, 2), &store, &sink)
+            .execute_run(make_task(), config_with(5, 2), true, None, &store, &sink)
             .await;
 
         match &run.status {
@@ -632,6 +827,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_pauses_and_retries_on_rate_limits_without_escalating_early() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = RunStore::new(tmp.path());
+        let mut reg = StageRegistry::new();
+        reg.register(fake(StageName::Inspect));
+        reg.register(fake(StageName::Analyze));
+        reg.register(fake(StageName::Plan));
+        reg.register(Arc::new(FakeStage {
+            name: StageName::Implement,
+            behavior: |_| {
+                Err(StageError::failed(
+                    StageName::Implement,
+                    "LLM 429: overloaded",
+                ))
+            },
+        }));
+        reg.register(fake(StageName::Test));
+        reg.register(fake(StageName::Diagnose));
+        reg.register(fake(StageName::Improve));
+        let orch = Orchestrator::new(reg);
+        let sink = CollectedSink::default();
+        let mut config = config_with(2, 1); // 1 attempt per round, 2 infra rounds => 3 total
+        config.execution.infra_pause_seconds = 0;
+
+        let run = orch
+            .execute_run(make_task(), config, true, None, &store, &sink)
+            .await;
+
+        match &run.status {
+            RunStatus::Failed { reason } => {
+                assert!(reason.contains("429"), "got: {reason}");
+                assert!(reason.contains("2 infra pause(s)"), "got: {reason}");
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+        let attempts = run.iterations[0].stage_results[0].attempts;
+        assert_eq!(attempts, 3, "3 total attempts across 1 + 2 infra rounds");
+        let pauses = sink
+            .events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.kind,
+                    EventKind::DecisionCreated { summary }
+                        if summary.contains("infra pause")
+                )
+            })
+            .count();
+        assert_eq!(pauses, 2, "two infra pause decisions recorded");
+    }
+
+    #[tokio::test]
     async fn run_times_out() {
         let tmp = tempfile::tempdir().unwrap();
         let store = RunStore::new(tmp.path());
@@ -643,7 +892,14 @@ mod tests {
         config.execution.timeout_minutes = 0;
 
         let run = orch
-            .execute_run(make_task(), config, &store, &CollectedSink::default())
+            .execute_run(
+                make_task(),
+                config,
+                true,
+                None,
+                &store,
+                &CollectedSink::default(),
+            )
             .await;
 
         assert_eq!(run.status, RunStatus::TimedOut);

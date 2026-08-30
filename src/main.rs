@@ -21,6 +21,7 @@ use core::orchestrator::{Orchestrator, StageRegistry};
 use core::store::RunStore;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 #[tokio::main]
 async fn main() {
@@ -59,6 +60,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             task,
             max_iterations,
             timeout_minutes,
+            yes,
         } => {
             cmd_run(
                 config_path.as_deref(),
@@ -66,6 +68,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 task,
                 max_iterations,
                 timeout_minutes,
+                yes,
             )
             .await?
         }
@@ -73,6 +76,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             task,
             max_iterations,
             timeout_minutes,
+            yes,
         } => {
             cmd_run(
                 config_path.as_deref(),
@@ -80,6 +84,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 task,
                 max_iterations,
                 timeout_minutes,
+                yes,
             )
             .await?
         }
@@ -87,7 +92,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         // The improvement engine runs inside the engineering loop; the CLI
         // command re-enters the same loop on the repository.
         Command::Improve { task } => {
-            cmd_run(config_path.as_deref(), &repo_root, task, None, None).await?
+            cmd_run(config_path.as_deref(), &repo_root, task, None, None, false).await?
         }
         Command::Report { run_id } => cmd_report(&repo_root, run_id)?,
         Command::Diff { run_id, full } => cmd_diff(&repo_root, run_id, full)?,
@@ -97,12 +102,14 @@ async fn dispatch(cli: Cli) -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_run(
     config_path: Option<&Path>,
     repo_root: &Path,
     task_description: String,
     max_iterations: Option<u32>,
     timeout_minutes: Option<u64>,
+    auto_approve: bool,
 ) -> Result<()> {
     let mut config = Config::load(config_path, repo_root).expect("configuration is valid");
     if let Some(max) = max_iterations {
@@ -135,10 +142,19 @@ async fn cmd_run(
     ]);
 
     // Phases 2–8 register the real engineering stages here as they land.
-    let registry = build_registry(&config)?;
+    let (registry, model_upgrade) = build_registry(&config)?;
     let orchestrator = Orchestrator::new(registry);
 
-    let run = orchestrator.execute_run(task, config, &store, &sinks).await;
+    let run = orchestrator
+        .execute_run(
+            task,
+            config,
+            auto_approve,
+            Some(model_upgrade),
+            &store,
+            &sinks,
+        )
+        .await;
 
     print_run_summary(&run, &store);
     let code = match run.status {
@@ -149,8 +165,10 @@ async fn cmd_run(
     std::process::exit(code);
 }
 
-fn build_registry(config: &Config) -> Result<StageRegistry> {
-    let provider: Arc<dyn providers::AgentProvider> = Arc::from(providers::build(&config.agent)?);
+fn build_registry(config: &Config) -> Result<(StageRegistry, Arc<AtomicBool>)> {
+    let handle = providers::build(&config.agent)?;
+    let provider: Arc<dyn providers::AgentProvider> = Arc::from(handle.provider);
+    let _model_upgrade_slot = std::sync::Arc::clone(&handle.upgrade);
     let mut registry = StageRegistry::new();
     // Phase 2: repository explorer.
     registry.register(Arc::new(agents::inspect::InspectStage));
@@ -176,12 +194,12 @@ fn build_registry(config: &Config) -> Result<StageRegistry> {
         provider: provider.clone(),
     }));
     registry.register(Arc::new(agents::verify::VerifyStage));
-    Ok(registry)
+    Ok((registry, handle.upgrade))
 }
 
 async fn cmd_analyze(config_path: Option<&Path>, repo_root: &Path, task: &str) -> Result<()> {
     let config = Config::load(config_path, repo_root)?;
-    let provider = providers::build(&config.agent)?;
+    let provider = providers::build(&config.agent)?.provider;
     let profile = repository::inspector::inspect(repo_root)?;
 
     println!(
@@ -216,7 +234,7 @@ async fn cmd_analyze(config_path: Option<&Path>, repo_root: &Path, task: &str) -
 
 async fn cmd_plan(config_path: Option<&Path>, repo_root: &Path, task: &str) -> Result<()> {
     let config = Config::load(config_path, repo_root)?;
-    let provider = providers::build(&config.agent)?;
+    let provider = providers::build(&config.agent)?.provider;
     let profile = repository::inspector::inspect(repo_root)?;
 
     println!(

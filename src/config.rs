@@ -34,6 +34,9 @@ pub struct AgentConfig {
     /// Override the provider API base URL (self-hosted / OpenAI-compatible
     /// endpoints). Defaults to the vendor's public API.
     pub base_url: Option<String>,
+    /// Optional stronger model the coder/improver upgrades to when the first
+    /// iteration fails to verify (model tiering, spec §13).
+    pub fallback_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -43,6 +46,9 @@ pub struct ExecutionConfig {
     pub timeout_minutes: u64,
     /// Attempts per stage before ForgeMan escalates instead of retrying forever.
     pub max_stage_attempts: u32,
+    /// Cooldown (seconds) before re-running a stage round that failed purely
+    /// on provider rate limits. Infra pauses do not consume attempts.
+    pub infra_pause_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -89,6 +95,9 @@ impl Default for AgentConfig {
             provider: "zai".to_string(),
             model: "glm-4.7-flash".to_string(),
             base_url: None,
+            // Optional stronger model the coder/improver upgrades to when the
+            // first iteration fails to verify (tiered fallback, spec §13).
+            fallback_model: None,
         }
     }
 }
@@ -99,6 +108,7 @@ impl Default for ExecutionConfig {
             max_iterations: 5,
             timeout_minutes: 20,
             max_stage_attempts: 3,
+            infra_pause_seconds: 90,
         }
     }
 }

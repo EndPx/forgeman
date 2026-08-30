@@ -120,6 +120,15 @@ built and measured; nothing on this page is aspirational.
 | Evidence | Round 1: final tree unimportable (0 tests could run). Round 2 (with the check): broken edit sets were rejected before damage; final state preserved 2/3 tests; `sanity_check_rejects_missing_local_module` / `sanity_check_passes_when_modules_exist` unit tests; commits after `d443f3b` |
 | Decision / learning | Kept. A 20-line static check buys what another model upgrade would cost — and its rejection reason doubles as the next prompt's context. Second lesson from the same round: free-tier 429 storms consume whole iterations, so the provider backoff grew to 5s/15s/30s |
 
+## Stage 12 — Performance gates on the evaluation suites
+
+| | |
+|---|---|
+| What | The eval task always said "fix the API performance issue", but only correctness was gated. Added performance gates: deterministic parse-count telemetry for Rust (20 lookups must not re-parse > 50 rows), timing gates for Node (1.5M-item dedup < 500ms) and Python (4000-item top-k < 1s) |
+| Why | "Performance fixed" was otherwise unverifiable — the same evidence-first principle applied to the non-functional requirement |
+| Evidence | Baseline suites fail the new gates by construction (measured: naive dedup 1010ms, naive top-k 1.8s, naive N+1 = 1000 row-parses); round-3 ForgeMan run on flawed-api fixed the N+1 gate but exhausted at 2/3 on the free tier |
+| Decision / learning | Kept. Non-functional requirements must be gated like functional ones or the agent optimizes only what is measured. Round-3 outcome also confirmed the model-tier ceiling honestly: the loop surfaces it instead of hiding it |
+
 ## Removed experiments (and what they taught)
 
 | Experiment | Why removed | Lesson |

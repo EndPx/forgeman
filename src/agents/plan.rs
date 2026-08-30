@@ -1,12 +1,13 @@
 //! Planner agent (spec §11): converts the task analysis into an executable,
 //! verifiable implementation plan.
 
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use crate::core::model::StageName;
 use crate::core::stage::{RunContext, Stage, StageError, StageFuture, StageOutput};
 use crate::providers::AgentProvider;
+
+pub use crate::core::model::ImplementationPlan;
 
 use super::analyze::TaskAnalysis;
 use super::llm::{complete, extract_json};
@@ -25,23 +26,6 @@ this exact schema:\n\
   \"validation_criteria\": [\"how to prove the change works\"],\n\
   \"rollback\": \"how to undo the change safely\"\n\
 }";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanStep {
-    pub description: String,
-    #[serde(default)]
-    pub affected_files: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ImplementationPlan {
-    pub summary: String,
-    pub steps: Vec<PlanStep>,
-    #[serde(default)]
-    pub validation_criteria: Vec<String>,
-    #[serde(default)]
-    pub rollback: String,
-}
 
 /// Build the plan from an analysis. Returns plan plus raw response for cost.
 pub async fn build_plan(

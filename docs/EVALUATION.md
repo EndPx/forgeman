@@ -96,6 +96,26 @@ persistent 429s consumed whole iterations. Reliability is currently bounded by
 the model tier, not by the loop; the loop's job — make every failure visible,
 bounded, and diagnosable — held in all cases.
 
+## Round 3 — performance gates
+
+The task text always said *"fix the API performance issue"* — but the suites
+only gated correctness, so nothing forced the perf fix. Round 3 added
+**performance gates** to all three suites:
+
+- `flawed-api`: deterministic parse-count gate — 20 lookups over 50 rows must
+  not re-parse more than 50 rows (the naive N+1 parses 1000)
+- `flawed-js`: timing gate — 1.5M-item dedup must finish < 500ms (naive O(n²)
+  measures ~1010ms; a Set-based fix ~60ms)
+- `flawed-py`: timing gate — 4000-item top-k must finish < 1s (naive O(n²)
+  measures ~1.8s)
+
+Round 3 re-ran `flawed-api`: **exhausted at 2/3** — the perf gate and one
+broken test were fixed, one regression remained, and the free-tier model ran
+out of iterations. The higher, more honest bar is simply harder for this
+model tier; the round-1 verified run (5/5 without the perf gate) still stands
+for the 5-test suite version, clearly labeled per suite version in the run
+records.
+
 ## Reproduce
 
 ```bash

@@ -232,6 +232,25 @@ pub struct FailureRecord {
     pub recommended_action: Option<String>,
 }
 
+/// One executable step of an implementation plan (spec §11).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlanStep {
+    pub description: String,
+    #[serde(default)]
+    pub affected_files: Vec<String>,
+}
+
+/// An executable, verifiable implementation plan produced by the planner.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplementationPlan {
+    pub summary: String,
+    pub steps: Vec<PlanStep>,
+    #[serde(default)]
+    pub validation_criteria: Vec<String>,
+    #[serde(default)]
+    pub rollback: String,
+}
+
 /// `run_YYYYMMDD_HHMMSS_xxxxxx` — lexicographic order is chronological.
 pub fn new_run_id() -> String {
     let suffix = &uuid::Uuid::new_v4().simple().to_string()[..6];

@@ -81,6 +81,10 @@ pub struct RunContext {
     /// Events stages want emitted (e.g. tool.completed). The orchestrator
     /// drains and records these after each stage attempt.
     pub event_buffer: Vec<crate::core::events::EventKind>,
+    /// Shared flag a tiered provider polls; set mid-run to upgrade the model.
+    pub model_upgrade: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Human approval for high-impact changes already given (CLI `--yes`).
+    pub auto_approve: bool,
 }
 
 impl RunContext {
@@ -91,6 +95,8 @@ impl RunContext {
             run,
             artifacts: BTreeMap::new(),
             event_buffer: Vec::new(),
+            model_upgrade: None,
+            auto_approve: false,
         }
     }
 

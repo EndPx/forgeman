@@ -14,6 +14,10 @@ pub struct ZaiProvider {
     client: Client,
     api_key: Option<String>,
     model: String,
+    /// Stronger model the provider switches to once the run signals an
+    /// upgrade (tiered fallback, spec §13). None = no tiering.
+    fallback_model: Option<String>,
+    upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
     base_url: String,
 }
 
@@ -30,11 +34,28 @@ impl ZaiProvider {
                 .expect("reqwest client builds"),
             api_key,
             model: model.into(),
+            fallback_model: None,
+            upgrade: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             base_url: base_url.into(),
         }
     }
 
-    pub fn from_config(config: &AgentConfig) -> Self {
+    /// Enable tiered fallback: when `upgrade` is set, calls use
+    /// `fallback_model` instead of the primary model.
+    pub fn with_tiering(
+        mut self,
+        fallback_model: Option<String>,
+        upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.fallback_model = fallback_model;
+        self.upgrade = upgrade;
+        self
+    }
+
+    pub fn from_config(
+        config: &AgentConfig,
+        upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
         let api_key = std::env::var("ZAI_API_KEY")
             .ok()
             .or_else(|| std::env::var("Z_AI_API_KEY").ok());
@@ -46,6 +67,18 @@ impl ZaiProvider {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
         )
+        .with_tiering(config.fallback_model.clone(), upgrade)
+    }
+
+    fn resolve_model(&self) -> String {
+        let upgraded = self.upgrade.load(std::sync::atomic::Ordering::Relaxed);
+        if upgraded {
+            self.fallback_model
+                .clone()
+                .unwrap_or_else(|| self.model.clone())
+        } else {
+            self.model.clone()
+        }
     }
 }
 
@@ -240,7 +273,10 @@ mod tests {
     async fn zai_live_ping() {
         crate::env::load_dotenv(std::path::Path::new(".env"));
         let config = AgentConfig::default();
-        let provider = ZaiProvider::from_config(&config);
+        let provider = ZaiProvider::from_config(
+            &config,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
         let response = provider
             .run(&Prompt::new("Reply with exactly: OK").with_max_tokens(1024))
             .await

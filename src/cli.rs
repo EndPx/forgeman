@@ -60,6 +60,9 @@ pub enum Command {
         /// Override execution.timeout_minutes from config.
         #[arg(long)]
         timeout_minutes: Option<u64>,
+        /// Auto-approve high-impact plans (CI, manifests, lockfiles).
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Convenience alias for `run`: the whole loop, end to end.
@@ -72,6 +75,9 @@ pub enum Command {
         /// Override execution.timeout_minutes from config.
         #[arg(long)]
         timeout_minutes: Option<u64>,
+        /// Auto-approve high-impact plans (CI, manifests, lockfiles).
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Run validation against the repository.

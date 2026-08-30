@@ -107,15 +107,27 @@ pub fn estimate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 
     input_tokens as f64 / 1e6 * in_rate + output_tokens as f64 / 1e6 * out_rate
 }
 
+/// Provider plus the shared upgrade flag the orchestrator can set to switch
+/// a tiered provider to its fallback model mid-run.
+pub struct ProviderHandle {
+    pub provider: Box<dyn AgentProvider>,
+    pub upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 /// Build the provider selected by configuration. Never hardcodes a vendor
 /// into the core — the config decides.
-pub fn build(config: &AgentConfig) -> Result<Box<dyn AgentProvider>, anyhow::Error> {
-    match config.provider.as_str() {
-        "zai" | "z-ai" | "zhipu" => Ok(Box::new(zai::ZaiProvider::from_config(config))),
-        "anthropic" => Ok(Box::new(anthropic::AnthropicProvider::from_config(config))),
-        "openai" => Ok(Box::new(openai::OpenAiProvider::from_config(config))),
+pub fn build(config: &AgentConfig) -> Result<ProviderHandle, anyhow::Error> {
+    let upgrade = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let provider: Box<dyn AgentProvider> = match config.provider.as_str() {
+        "zai" | "z-ai" | "zhipu" => Box::new(zai::ZaiProvider::from_config(
+            config,
+            std::sync::Arc::clone(&upgrade),
+        )),
+        "anthropic" => Box::new(anthropic::AnthropicProvider::from_config(config)),
+        "openai" => Box::new(openai::OpenAiProvider::from_config(config)),
         other => {
             anyhow::bail!("unknown agent.provider `{other}` — supported: zai, anthropic, openai")
         }
-    }
+    };
+    Ok(ProviderHandle { provider, upgrade })
 }

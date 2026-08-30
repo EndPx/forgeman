@@ -449,9 +449,9 @@ fn tool_name(action: &str) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::super::plan::PlanStep;
     use super::*;
     use crate::config::Config;
+    use crate::core::model::PlanStep;
     use crate::core::model::{Run, Task, new_task_id};
     use crate::core::stage::RunContext;
     use crate::providers::test_util::spawn_one_shot;
