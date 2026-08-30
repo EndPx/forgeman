@@ -61,6 +61,8 @@ const LOOP_REQUIRED: [StageName; 4] = [
 /// How many times a rate-limited stage may pause-and-retry its full attempt
 /// round before escalating. Infra pauses never consume the iteration budget.
 const INFRA_PAUSE_ROUNDS: u32 = 2;
+/// Global cooldown once several stages in a row hit rate limits.
+const STORM_COOLDOWN_SECS: u64 = 120;
 
 fn is_transient_rate_limit(message: &str) -> bool {
     let lower = message.to_lowercase();
@@ -316,6 +318,24 @@ impl Orchestrator {
         let mut total_attempts: u32 = 0;
         let mut infra_round = 0u32;
 
+        // Quota-storm cooldown: consecutive infra pauses across stages mean
+        // the provider quota is exhausted — back off globally before burning
+        // another stage attempt (test configs set pause seconds to 0).
+        if ctx.infra_storm >= 2 && ctx.config.execution.infra_pause_seconds > 0 {
+            let cooldown = STORM_COOLDOWN_SECS;
+            sinks.record(&Event::now(
+                &ctx.run.id,
+                ctx.current_iteration_index(),
+                EventKind::DecisionCreated {
+                    summary: format!(
+                        "quota storm detected — global cooldown {cooldown}s before `{name}`"
+                    ),
+                },
+            ));
+            tokio::time::sleep(std::time::Duration::from_secs(cooldown)).await;
+            ctx.infra_storm = 0;
+        }
+
         'infra: loop {
             let mut round_was_infra = false;
             'attempts: for _ in 1..=max_attempts {
@@ -335,6 +355,8 @@ impl Orchestrator {
                         for (key, value) in output.artifacts {
                             ctx.put_artifact(key, value);
                         }
+                        ctx.stage_feedback.remove(&name);
+                        ctx.infra_storm = 0;
                         // Flush stage-deferred events (tool executions, …).
                         for kind in ctx.event_buffer.drain(..) {
                             sinks.record(&Event::now(&ctx.run.id, iter_index, kind));
@@ -398,6 +420,10 @@ impl Orchestrator {
                         });
                         last_error = message.clone();
                         round_was_infra = is_transient_rate_limit(&message);
+                        ctx.stage_feedback.insert(name, message.clone());
+                        if round_was_infra {
+                            ctx.infra_storm += 1;
+                        }
                         if !err.is_retryable() {
                             break 'attempts;
                         }

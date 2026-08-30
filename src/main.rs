@@ -207,7 +207,7 @@ async fn cmd_analyze(config_path: Option<&Path>, repo_root: &Path, task: &str) -
         config.agent.provider, config.agent.model
     );
     let (analysis, response) =
-        agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task)
+        agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task, "")
             .await
             .map_err(|err| anyhow::anyhow!("analysis failed: {err}"))?;
 
@@ -241,11 +241,12 @@ async fn cmd_plan(config_path: Option<&Path>, repo_root: &Path, task: &str) -> R
         "Planning with {} ({}) …",
         config.agent.provider, config.agent.model
     );
-    let (analysis, _) = agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task)
-        .await
-        .map_err(|err| anyhow::anyhow!("analysis failed: {err}"))?;
+    let (analysis, _) =
+        agents::analyze::analyze_task(provider.as_ref(), &profile.summary(), task, "")
+            .await
+            .map_err(|err| anyhow::anyhow!("analysis failed: {err}"))?;
     let (plan, response) =
-        agents::plan::build_plan(provider.as_ref(), &profile.summary(), &analysis)
+        agents::plan::build_plan(provider.as_ref(), &profile.summary(), &analysis, "")
             .await
             .map_err(|err| anyhow::anyhow!("planning failed: {err}"))?;
 

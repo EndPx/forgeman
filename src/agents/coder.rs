@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::core::model::StageName;
@@ -291,7 +291,101 @@ pub fn sanity_check(ctx: &mut RunContext, changes: &ImplementationChanges) -> Re
         ctx.put_artifact("edit.sanity_error", serde_json::json!(violation));
         return Err(violation);
     }
+    if let Err(violation) = check_python_exports(&ctx.task.repo_root, &changes.written_files) {
+        ctx.put_artifact("edit.sanity_error", serde_json::json!(violation));
+        return Err(violation);
+    }
     ctx.artifacts.remove("edit.sanity_error");
+    Ok(())
+}
+
+/// The observed py failure mode: the model rewrites a module and silently
+/// drops functions the tests import (`from report import slugify`). Verify
+/// every name the tests import from an edited module is still defined there.
+fn check_python_exports(repo_root: &Path, written: &[String]) -> Result<(), String> {
+    let py_written: Vec<&String> = written.iter().filter(|f| f.ends_with(".py")).collect();
+    if py_written.is_empty() {
+        return Ok(());
+    }
+
+    // Collect test files at any depth (tests/, test/).
+    let mut test_files: Vec<PathBuf> = Vec::new();
+    for dir in ["tests", "test"] {
+        let base = repo_root.join(dir);
+        if let Ok(entries) = std::fs::read_dir(&base) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("test_") && name.ends_with(".py") {
+                    test_files.push(base.join(&name));
+                }
+            }
+        }
+    }
+    if test_files.is_empty() {
+        return Ok(());
+    }
+
+    let module_of = |file: &str| -> Option<String> {
+        let path = Path::new(file);
+        let stem = path.file_stem()?.to_string_lossy().to_string();
+        // Only top-level modules (tests do `from report import x`).
+        if path.parent()?.file_name()?.to_string_lossy() == "tests"
+            || path.parent()?.file_name().is_none()
+        {
+            Some(stem)
+        } else {
+            None
+        }
+    };
+
+    for file in py_written {
+        let Some(module) = module_of(file) else {
+            continue;
+        };
+        let Ok(content) = std::fs::read_to_string(repo_root.join(file)) else {
+            continue;
+        };
+        for test_file in &test_files {
+            let Ok(test_content) = std::fs::read_to_string(test_file) else {
+                continue;
+            };
+            let needle = format!("from {module} import");
+            for line in test_content.lines() {
+                let Some(rest) = line.trim().strip_prefix(&needle) else {
+                    continue;
+                };
+                let rest = rest.trim_start();
+                let names: Vec<String> = if let Some(paren) = rest.strip_prefix('(') {
+                    paren
+                        .split(')')
+                        .next()
+                        .unwrap_or(paren)
+                        .split(',')
+                        .map(|piece| piece.trim())
+                        .filter(|piece| !piece.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                } else {
+                    rest.split(',')
+                        .map(|piece| piece.trim())
+                        .take_while(|piece| !piece.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                };
+                for name in names {
+                    let defined = content.contains(&format!("def {name}("))
+                        || content.contains(&format!("class {name}"))
+                        || content.contains(&format!("{name} ="));
+                    if !defined {
+                        return Err(format!(
+                            "rejected: tests import `{name}` from `{module}` but the edited \
+                             module no longer defines it — keep the function/class in place"
+                        ));
+                    }
+                }
+            }
+        }
+    }
     Ok(())
 }
 

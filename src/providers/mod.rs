@@ -123,8 +123,14 @@ pub fn build(config: &AgentConfig) -> Result<ProviderHandle, anyhow::Error> {
             config,
             std::sync::Arc::clone(&upgrade),
         )),
-        "anthropic" => Box::new(anthropic::AnthropicProvider::from_config(config)),
-        "openai" => Box::new(openai::OpenAiProvider::from_config(config)),
+        "anthropic" => Box::new(anthropic::AnthropicProvider::from_config(
+            config,
+            std::sync::Arc::clone(&upgrade),
+        )),
+        "openai" => Box::new(openai::OpenAiProvider::from_config(
+            config,
+            std::sync::Arc::clone(&upgrade),
+        )),
         other => {
             anyhow::bail!("unknown agent.provider `{other}` — supported: zai, anthropic, openai")
         }

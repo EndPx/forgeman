@@ -38,6 +38,7 @@ export type ToolExecution = {
   arguments?: { path?: string; action?: string };
   result: string;
   duration_ms: number;
+  iteration?: number | null;
 };
 
 export type Run = {

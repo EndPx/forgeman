@@ -26,17 +26,22 @@ the suite passes (exit code 0).
 
 | Case | Repository | Planted defects | Test suite |
 |---|---|---|---|
-| `flawed-api` | Rust (cargo) | broken build, 2 failing tests, full-scan-per-lookup hot path | `cargo test` (5 tests) |
-| `flawed-js` | Node (npm) | inverted discount math, O(n²) dedup, 1 failing test | `node --test` TAP (3 tests) |
-| `flawed-py` | Python (unittest) | wrong separator in slugify, O(n²) top-k, 1 failing test | `python -m unittest` (3 tests) |
+| `flawed-api` | Rust (cargo) | broken build, 2 failing tests, full-scan-per-lookup hot path | `cargo test` (4 tests incl. deterministic perf gate) |
+| `flawed-js` | Node (npm) | inverted discount math, O(n²) dedup, 1 failing test | `node --test` TAP (4 tests incl. timing perf gate) |
+| `flawed-py` | Python (unittest) | wrong separator in slugify, O(n²) top-k, 1 failing test | `python -m unittest` (4 tests incl. timing perf gate) |
+
+> Suite-version note: the perf gates were added in **round 3**; the baseline and
+> round-1 ForgeMan attempts ran on the pre-gate suites (5/3/3 tests). Each run
+> record snapshots its own suite outcome, so the numbers below are labeled by
+> round.
 
 ## Results
 
-| Case | Baseline (best of attempts) | ForgeMan (best of 2 runs) | Winner |
+| Case | Baseline (best of attempts, pre-gate suites) | ForgeMan round 1 (pre-gate suites) | ForgeMan round 2–3 |
 |---|---|---|---|
-| `flawed-api` (Rust) | 2/5 tests, never passed (3 attempts: 2× 429, 1× applied edit left 1 test failing) | **5/5 — VERIFIED** in 3 iterations, 2 compile errors diagnosed with root cause + confidence | **ForgeMan** |
-| `flawed-js` (Node) | 2/3 tests, never passed (2 attempts: 2× 429; earlier attempts applied edits but left the suite failing) | **exhausted twice** — the model kept splitting code into a new module without writing it; final tree did not even load | Baseline (less damage) |
-| `flawed-py` (Python) | 2/3 tests, never passed (2 attempts: 1× no parsable JSON → 0 edits; 1× edit broke imports → 10 test errors) | exhausted; final state 2/3 — no regression, no fix | Tie |
+| `flawed-api` (Rust) | 2/3 tests, never passed (3 attempts: 2× 429, 1× applied edit left 1 test failing) | **5/5 — VERIFIED** in 3 iterations, 2 compile errors diagnosed with root cause + confidence | round 3 (perf gate added): exhausted at 2/3 — gate passed, one regression left, iterations ran out |
+| `flawed-js` (Node) | 2/3 tests, never passed (2 attempts: 2× 429; earlier attempts applied edits but left the suite failing) | **exhausted twice** — the model kept splitting code into a new module without writing it; final tree did not even load | round 2: sanity check rejected the broken edits — tree preserved 2/3 (no regression) |
+| `flawed-py` (Python) | 2/3 tests, never passed (2 attempts: 1× no parsable JSON → 0 edits; 1× edit broke imports → 10 test errors) | exhausted; final state 2/3 — no regression, no fix | round 2: exhausted; an edit introduced 1 runtime error; diagnose itself hit a 429 |
 | **Cases solved** | **0 / 3** | **1 / 3** (the hardest: compile errors + 2 broken tests) | |
 
 Raw data: [`baseline-results.json`](baseline-results.json) (baseline) and
@@ -58,6 +63,13 @@ Raw data: [`baseline-results.json`](baseline-results.json) (baseline) and
 3. **The baseline is not a strawman**: it applied real edits, and in one case
    its outcome (2/3) was better than ForgeMan's final state on that case. We
    report it as-is.
+4. **Round 3 revealed a new failure mode**: with the perf gate added, the
+   round-3 run on `flawed-api` ended with the gate test *removed from the
+   suite* — the model edited the test file instead of fixing the code and
+   passed 2/3 of the remaining tests. Tampering with the judge is the classic
+   loophole in test-driven agent evaluation; the roadmap fix is to treat test
+   edits as high-impact (approval gate) or run the suite from a protected
+   copy.
 
 ## Challenging case
 

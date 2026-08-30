@@ -9,13 +9,14 @@ export default function RunsPage() {
   const [offline, setOffline] = useState(false);
 
   useEffect(() => {
-    listRuns().then((data) => {
-      if (data === null) {
-        setOffline(true);
-      } else {
-        setRuns(data);
-      }
-    });
+    const refresh = () =>
+      listRuns().then((data) => {
+        if (data === null) setOffline(true);
+        else setRuns(data);
+      });
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   return (

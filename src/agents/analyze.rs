@@ -48,9 +48,15 @@ pub async fn analyze_task(
     provider: &dyn AgentProvider,
     profile_summary: &str,
     task_description: &str,
+    feedback: &str,
 ) -> Result<(TaskAnalysis, crate::providers::Response), String> {
+    let feedback_block = if feedback.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nPREVIOUS ATTEMPT FAILED:\n{feedback}\nAdjust your output accordingly.")
+    };
     let user = format!(
-        "REPOSITORY PROFILE:\n{profile_summary}\n\nTASK:\n{task_description}\n\n\
+        "REPOSITORY PROFILE:\n{profile_summary}\n\nTASK:\n{task_description}{feedback_block}\n\n\
          Produce the analysis JSON now."
     );
     let response = complete(provider, ANALYZE_SYSTEM, user).await?;
@@ -80,10 +86,16 @@ impl Stage for AnalyzeStage {
                 )
             })?;
 
+            let feedback = ctx
+                .stage_feedback
+                .get(&StageName::Analyze)
+                .cloned()
+                .unwrap_or_default();
             let (analysis, response) = analyze_task(
                 self.provider.as_ref(),
                 &profile.summary(),
                 &ctx.task.description,
+                &feedback,
             )
             .await
             .map_err(|err| StageError::failed(StageName::Analyze, err))?;

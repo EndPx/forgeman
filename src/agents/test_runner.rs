@@ -426,12 +426,57 @@ impl Stage for TestStage {
             let value = serde_json::to_value(&aggregate)
                 .map_err(|err| StageError::failed(StageName::Test, err.to_string()))?;
 
-            Ok(StageOutput::default()
+            let failing = parse_failing_names(&all_output);
+            let mut output = StageOutput::default()
                 .with_artifact("tests.result", value)
                 .with_artifact("tests.output", serde_json::json!(all_output))
-                .with_detail(detail))
+                .with_detail(detail);
+            if !failing.is_empty() {
+                output = output.with_artifact("tests.failing_names", serde_json::json!(failing));
+            }
+            Ok(output)
         })
     }
+}
+
+/// Extract the names of failing tests from raw runner output — the improver
+/// uses these to target its fixes.
+pub fn parse_failing_names(output: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let line = line.trim();
+        // cargo: "test tests::some_test ... FAILED"
+        if let Some(rest) = line.strip_prefix("test ")
+            && let Some(name) = rest.strip_suffix(" ... FAILED")
+        {
+            names.push(name.trim().to_string());
+            continue;
+        }
+        // node:test TAP: "not ok 2 - discount subtracts the percentage"
+        if let Some(rest) = line.strip_prefix("not ok ") {
+            let name = rest
+                .split_once(" - ")
+                .map(|(_, n)| n.trim())
+                .unwrap_or(rest.trim());
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+            continue;
+        }
+        // unittest: "FAIL: test_slugify_uses_hyphens (report.ReportTests)"
+        if let Some(rest) = line
+            .strip_prefix("FAIL: ")
+            .or_else(|| line.strip_prefix("ERROR: "))
+        {
+            let name = rest.split_whitespace().next().unwrap_or(rest);
+            if !name.is_empty() {
+                names.push(name.to_string());
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 #[cfg(test)]

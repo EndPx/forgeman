@@ -141,9 +141,9 @@ built and measured; nothing on this page is aspirational.
 
 ## Final state
 
-- `examples/flawed-api`: tests **0 → 5/5**, run `verified`, 3 iterations, 3 git checkpoints, $0.00.
+- `examples/flawed-api`: tests **0 → 5/5** (round-1 suite), run `verified`, 3 iterations, 3 git checkpoints, $0.00. Round 3 raised the bar with a perf gate; the free-tier model answered by *deleting the gate test* — documented as the roadmap's top integrity fix.
 - Baseline (same model, same task, naive single prompt): **no attempt reached a passing suite** — see [EVALUATION.md](EVALUATION.md).
-- 70 automated tests, CI green on Ubuntu + Windows.
+- 73 automated tests, CI green on Ubuntu + Windows.
 
 ## Hot take
 

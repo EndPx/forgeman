@@ -41,7 +41,7 @@ built during this hackathon (August 29–30, 2026).** Nothing predates it.
 |---|---|
 | ![terminal](docs/screenshots/terminal-verified.png) | ![dashboard](docs/screenshots/dashboard-run-detail.png) |
 
-**What happened in that run** (100% real, on [`examples/flawed-api`](examples/flawed-api) — a repo with a deliberately broken build and two failing tests):
+**What happened in that run** (100% real, on [`examples/flawed-api`](examples/flawed-api) — a repo with a deliberately broken build and two failing tests; run on the 5-test suite *before* the stricter round-3 performance gate was added):
 
 | Metric | Result |
 |---|---|

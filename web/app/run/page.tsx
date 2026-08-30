@@ -31,11 +31,16 @@ function RunContent() {
       setMissing(true);
       return;
     }
-    loadRun(id).then((data) => {
-      if (data === null) setMissing(true);
-      else setRun(data);
-    });
-    loadEvents(id).then((data) => setEvents(data ?? []));
+    const refresh = () => {
+      loadRun(id).then((data) => {
+        if (data === null) setMissing(true);
+        else setRun(data);
+      });
+      loadEvents(id).then((data) => setEvents(data ?? []));
+    };
+    refresh();
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
   }, [id]);
 
   if (missing) {
@@ -128,6 +133,13 @@ function RunContent() {
                   <span className="commit">⌾ {iteration.git_commit}</span>
                 ) : null}
               </div>
+              {(run.tool_executions ?? [])
+                .filter((t) => t.iteration === iteration.index)
+                .map((t, key) => (
+                  <div key={"tool" + key} className="muted">
+                    ⚙ {t.tool}: {t.arguments?.path ?? t.result}
+                  </div>
+                ))}
               {iteration.stage_results?.map((stageResult, key) => (
                 <div key={key} className="muted">
                   {stageResult.stage} [{stageResult.status}]{" "}

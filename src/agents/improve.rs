@@ -108,6 +108,14 @@ impl Stage for ImproveStage {
                  Produce the fix edits JSON now.",
                 task = ctx.task.description
             );
+            if let Some(failing) = ctx.artifact_as::<Vec<String>>("tests.failing_names")
+                && !failing.is_empty()
+            {
+                user.push_str(&format!(
+                    "\n\nTESTS CURRENTLY FAILING (these must pass after your fix): {}",
+                    failing.join(", ")
+                ));
+            }
             if let Some(sanity) = ctx.artifact("edit.sanity_error").and_then(|v| v.as_str()) {
                 user.push_str(&format!(
                     "\n\nPREVIOUS EDIT SET WAS REJECTED BY THE SANITY CHECK:\n{sanity}\n\

@@ -85,6 +85,12 @@ pub struct RunContext {
     pub model_upgrade: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Human approval for high-impact changes already given (CLI `--yes`).
     pub auto_approve: bool,
+    /// Per-stage last failure message — retried stages fold it into their
+    /// prompt as feedback instead of repeating themselves.
+    pub stage_feedback: BTreeMap<StageName, String>,
+    /// Consecutive infra (rate-limit) pauses across stages — drives the
+    /// run-level quota-storm cooldown.
+    pub infra_storm: u32,
 }
 
 impl RunContext {
@@ -97,6 +103,8 @@ impl RunContext {
             event_buffer: Vec::new(),
             model_upgrade: None,
             auto_approve: false,
+            stage_feedback: BTreeMap::new(),
+            infra_storm: 0,
         }
     }
 

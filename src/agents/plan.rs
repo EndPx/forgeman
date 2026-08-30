@@ -32,11 +32,17 @@ pub async fn build_plan(
     provider: &dyn AgentProvider,
     profile_summary: &str,
     analysis: &TaskAnalysis,
+    feedback: &str,
 ) -> Result<(ImplementationPlan, crate::providers::Response), String> {
     let analysis_json = serde_json::to_string_pretty(analysis)
         .map_err(|err| format!("cannot serialize analysis: {err}"))?;
+    let feedback_block = if feedback.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nPREVIOUS ATTEMPT FAILED:\n{feedback}\nAdjust your output accordingly.")
+    };
     let user = format!(
-        "REPOSITORY PROFILE:\n{profile_summary}\n\nTASK ANALYSIS:\n{analysis_json}\n\n\
+        "REPOSITORY PROFILE:\n{profile_summary}\n\nTASK ANALYSIS:\n{analysis_json}{feedback_block}\n\n\
          Produce the implementation plan JSON now."
     );
     let response = complete(provider, PLAN_SYSTEM, user).await?;
@@ -76,10 +82,19 @@ impl Stage for PlanStage {
                     )
                 })?;
 
-            let (plan, response) =
-                build_plan(self.provider.as_ref(), &profile.summary(), &analysis)
-                    .await
-                    .map_err(|err| StageError::failed(StageName::Plan, err))?;
+            let feedback = ctx
+                .stage_feedback
+                .get(&StageName::Plan)
+                .cloned()
+                .unwrap_or_default();
+            let (plan, response) = build_plan(
+                self.provider.as_ref(),
+                &profile.summary(),
+                &analysis,
+                &feedback,
+            )
+            .await
+            .map_err(|err| StageError::failed(StageName::Plan, err))?;
             ctx.run.total_cost_usd += response.cost_usd;
 
             let detail = format!(

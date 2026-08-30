@@ -50,6 +50,7 @@ pub async fn diagnose_failure(
     test_summary: &str,
     failure_output: &str,
     changes_summary: &str,
+    feedback: &str,
 ) -> Result<(FailureAnalysis, crate::providers::Response), String> {
     let mut trimmed_output = failure_output.to_string();
     if trimmed_output.len() > MAX_FAILURE_OUTPUT_CHARS {
@@ -59,10 +60,15 @@ pub async fn diagnose_failure(
         );
     }
 
+    let feedback_block = if feedback.is_empty() {
+        String::new()
+    } else {
+        format!("\n\nPREVIOUS ATTEMPT FAILED:\n{feedback}\nAdjust your output accordingly.")
+    };
     let user = format!(
         "TASK:\n{task_description}\n\nTEST SUMMARY:\n{test_summary}\n\n\
          FAILURE OUTPUT (tail):\n{trimmed_output}\n\n\
-         CHANGES JUST APPLIED:\n{changes_summary}\n\n\
+         CHANGES JUST APPLIED:\n{changes_summary}{feedback_block}\n\n\
          Produce the failure analysis JSON now."
     );
     let response = complete(provider, DIAGNOSE_SYSTEM, user).await?;
@@ -111,12 +117,18 @@ impl Stage for DiagnoseStage {
                 tests.passed, tests.total, tests.command
             );
 
+            let feedback = ctx
+                .stage_feedback
+                .get(&StageName::Diagnose)
+                .cloned()
+                .unwrap_or_default();
             let (analysis, response) = diagnose_failure(
                 self.provider.as_ref(),
                 &ctx.task.description,
                 &summary,
                 &output,
                 &changes_summary,
+                &feedback,
             )
             .await
             .map_err(|err| StageError::failed(StageName::Diagnose, err))?;

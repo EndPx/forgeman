@@ -13,6 +13,8 @@ pub struct OpenAiProvider {
     client: Client,
     api_key: Option<String>,
     model: String,
+    fallback_model: Option<String>,
+    upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
     base_url: String,
 }
 
@@ -29,11 +31,38 @@ impl OpenAiProvider {
                 .expect("reqwest client builds"),
             api_key,
             model: model.into(),
+            fallback_model: None,
+            upgrade: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             base_url: base_url.into(),
         }
     }
 
-    pub fn from_config(config: &AgentConfig) -> Self {
+    /// Tiered fallback (spec §13): `upgrade` switches to `fallback_model`.
+    pub fn with_tiering(
+        mut self,
+        fallback_model: Option<String>,
+        upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
+        self.fallback_model = fallback_model;
+        self.upgrade = upgrade;
+        self
+    }
+
+    fn resolve_model(&self) -> String {
+        let upgraded = self.upgrade.load(std::sync::atomic::Ordering::Relaxed);
+        if upgraded {
+            self.fallback_model
+                .clone()
+                .unwrap_or_else(|| self.model.clone())
+        } else {
+            self.model.clone()
+        }
+    }
+
+    pub fn from_config(
+        config: &AgentConfig,
+        upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> Self {
         Self::new(
             std::env::var("OPENAI_API_KEY").ok(),
             config.model.clone(),
@@ -42,6 +71,7 @@ impl OpenAiProvider {
                 .clone()
                 .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
         )
+        .with_tiering(config.fallback_model.clone(), upgrade)
     }
 }
 
@@ -89,7 +119,7 @@ impl AgentProvider for OpenAiProvider {
             messages.push(json!({ "role": "user", "content": prompt.user }));
 
             let body = json!({
-                "model": self.model,
+                "model": self.resolve_model(),
                 "messages": messages,
                 "max_tokens": prompt.max_tokens,
                 "temperature": prompt.temperature,
