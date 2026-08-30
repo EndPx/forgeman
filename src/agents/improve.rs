@@ -34,7 +34,9 @@ no prose, no markdown fences, matching this exact schema:\n\
   ]\n\
 }\n\
 Rules: `content` must be the COMPLETE final file content. Only touch files \
-involved in the fix. Keep existing code style.";
+involved in the fix. Edit existing files IN PLACE — do not split existing \
+code into new files. Every module your code requires must be written by an \
+edit in this same set. Keep existing code style.";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImprovementChanges {
@@ -100,12 +102,18 @@ impl Stage for ImproveStage {
                 ));
             }
 
-            let user = format!(
+            let mut user = format!(
                 "TASK:\n{task}\n\nFAILURE ANALYSIS (previous attempt):\n{failure_json}\n\n\
                  RELEVANT FILES:{files_block}\n\n\
                  Produce the fix edits JSON now.",
                 task = ctx.task.description
             );
+            if let Some(sanity) = ctx.artifact("edit.sanity_error").and_then(|v| v.as_str()) {
+                user.push_str(&format!(
+                    "\n\nPREVIOUS EDIT SET WAS REJECTED BY THE SANITY CHECK:\n{sanity}\n\
+                     Correct that problem in this edit set."
+                ));
+            }
 
             let (output, response) = produce_edits(self.provider.as_ref(), IMPROVE_SYSTEM, user)
                 .await
@@ -113,6 +121,8 @@ impl Stage for ImproveStage {
             ctx.run.total_cost_usd += response.cost_usd;
 
             let changes: ImplementationChanges = apply_edits(ctx, &output)?;
+            super::coder::sanity_check(ctx, &changes)
+                .map_err(|violation| StageError::failed(StageName::Improve, violation))?;
             let improvement = ImprovementChanges {
                 summary: changes.summary,
                 written_files: changes.written_files,

@@ -8,6 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::core::model::StageName;
@@ -37,8 +38,10 @@ snippet). Make the MINIMAL change that satisfies the plan. Only touch files \
 named in the plan, the analysis, or the RELEVANT FILES section. Do NOT add \
 dependencies, do NOT modify Cargo.toml or package.json, do NOT rename the \
 package, do NOT create new binaries or modules unless the plan explicitly \
-requires it. Never create files outside the repository. Keep existing code \
-style.";
+requires it. Edit existing files IN PLACE — do not split existing code into \
+new files. Every module your code requires must be written by an edit in \
+this same set. Never create files outside the repository. Keep existing \
+code style.";
 
 /// Maximum files embedded in the coder prompt (context budget).
 const MAX_CONTEXT_FILES: usize = 10;
@@ -73,6 +76,7 @@ pub async fn implement(
     analysis: &TaskAnalysis,
     plan: &ImplementationPlan,
     file_context: &[(String, String)],
+    feedback: &str,
 ) -> Result<(CoderOutput, crate::providers::Response), String> {
     let analysis_json = serde_json::to_string_pretty(analysis)
         .map_err(|err| format!("cannot serialize analysis: {err}"))?;
@@ -89,9 +93,18 @@ pub async fn implement(
         ));
     }
 
+    let feedback_block = if feedback.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nPREVIOUS EDIT SET WAS REJECTED BY THE SANITY CHECK:\n{feedback}\n\
+             Correct that problem in this edit set."
+        )
+    };
+
     let user = format!(
         "TASK:\n{task_description}\n\nTASK ANALYSIS:\n{analysis_json}\n\n\
-         IMPLEMENTATION PLAN:\n{plan_json}\n\nRELEVANT FILES:{context}\n\n\
+         IMPLEMENTATION PLAN:\n{plan_json}\n\nRELEVANT FILES:{context}{feedback_block}\n\n\
          Produce the edits JSON now."
     );
     produce_edits(provider, CODER_SYSTEM, user).await
@@ -174,18 +187,26 @@ impl Stage for CoderStage {
             })?;
 
             let file_context = collect_relevant_files(&ctx.task.repo_root, &plan, &analysis);
+            let feedback = ctx
+                .artifact("edit.sanity_error")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
             let (output, response) = implement(
                 self.provider.as_ref(),
                 &ctx.task.description,
                 &analysis,
                 &plan,
                 &file_context,
+                &feedback,
             )
             .await
             .map_err(|err| StageError::failed(StageName::Implement, err))?;
             ctx.run.total_cost_usd += response.cost_usd;
 
             let changes = apply_edits(ctx, &output)?;
+            sanity_check(ctx, &changes)
+                .map_err(|violation| StageError::failed(StageName::Implement, violation))?;
 
             let detail = format!(
                 "{} file(s) written, {} deleted — {} [{} tok]",
@@ -253,6 +274,169 @@ pub fn apply_edits(
         written_files: written,
         deleted_files: deleted,
     })
+}
+
+/// Structural sanity check applied right after the edits land and before any
+/// test iteration is spent: catch missing local modules (node) and Python
+/// syntax errors while the rejection reason can still reach the model.
+///
+/// Returns the violation text (also stored as `edit.sanity_error` so the
+/// retried stage's prompt carries the feedback), or `Ok(())` when clean.
+pub fn sanity_check(ctx: &mut RunContext, changes: &ImplementationChanges) -> Result<(), String> {
+    if let Err(violation) = check_node_imports(&ctx.task.repo_root, &changes.written_files) {
+        ctx.put_artifact("edit.sanity_error", serde_json::json!(violation));
+        return Err(violation);
+    }
+    if let Err(violation) = check_python_syntax(&ctx.task.repo_root, &changes.written_files) {
+        ctx.put_artifact("edit.sanity_error", serde_json::json!(violation));
+        return Err(violation);
+    }
+    ctx.artifacts.remove("edit.sanity_error");
+    Ok(())
+}
+
+const NODE_SOURCE_EXT: &[&str] = &["js", "mjs", "cjs", "jsx", "tsx"];
+
+fn check_node_imports(repo_root: &Path, written: &[String]) -> Result<(), String> {
+    let has_node_project = repo_root.join("package.json").exists();
+    let touched_node = written
+        .iter()
+        .any(|file| NODE_SOURCE_EXT.contains(&file.rsplit('.').next().unwrap_or("")));
+    if !has_node_project || !touched_node {
+        return Ok(());
+    }
+
+    for file in written {
+        let ext = file.rsplit('.').next().unwrap_or("");
+        if !NODE_SOURCE_EXT.contains(&ext) {
+            continue;
+        }
+        let Ok(content) = fs_err_read(repo_root, file) else {
+            continue;
+        };
+        for specifier in relative_imports(&content) {
+            let base = file.rsplit_once('/').map(|(dir, _)| dir);
+            let target = match base {
+                Some(dir) => format!("{dir}/{specifier}"),
+                None => specifier.clone(),
+            };
+            let normalized = normalize_relative(&target);
+            if module_exists(repo_root, &normalized) {
+                continue;
+            }
+            return Err(format!(
+                "rejected: `{file}` imports local module `{specifier}` but that file does not \
+                 exist after applying the edits — include an edit that writes it (or fix the path)"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Extract relative specifiers from `require("./x")`, `import … from "./x"`,
+/// and `import("./x")`.
+fn relative_imports(content: &str) -> Vec<String> {
+    let mut specifiers = Vec::new();
+    let bytes = content.as_bytes();
+    let mut index = 0;
+    while let Some(found) = content[index..].find("./") {
+        let at = index + found;
+        // The character before "./" must introduce a path context (quote,
+        // paren, or space) and we then read the quoted string.
+        if at > 0 && !matches!(bytes[at - 1], b'\'' | b'"' | b'(' | b' ') {
+            index = at + 2;
+            continue;
+        }
+        let quote_start = if at > 0 && matches!(bytes[at - 1], b'\'' | b'"') {
+            at - 1
+        } else {
+            // skip to the next quote after "./" (dynamic import case)
+            match content[at + 2..].find(['\'', '"']) {
+                Some(offset) => at + 2 + offset,
+                None => {
+                    index = at + 2;
+                    continue;
+                }
+            }
+        };
+        let quote = bytes[quote_start];
+        let Some(length) = content[quote_start + 1..].find(quote as char) else {
+            break;
+        };
+        let specifier = content[quote_start + 1..quote_start + 1 + length].to_string();
+        index = quote_start + 1 + length;
+        if specifier.starts_with("./") || specifier.starts_with("../") {
+            specifiers.push(specifier);
+        }
+    }
+    specifiers.sort();
+    specifiers.dedup();
+    specifiers
+}
+
+fn normalize_relative(target: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in target.split('/') {
+        match part {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other),
+        }
+    }
+    parts.join("/")
+}
+
+fn module_exists(repo_root: &Path, module: &str) -> bool {
+    let base = repo_root.join(module);
+    [
+        base.clone(),
+        base.with_extension("js"),
+        base.with_extension("mjs"),
+        base.with_extension("cjs"),
+        base.join("index.js"),
+        base.join("index.mjs"),
+    ]
+    .iter()
+    .any(|candidate| candidate.is_file())
+}
+
+fn fs_err_read(repo_root: &Path, relative: &str) -> Result<String, ()> {
+    std::fs::read_to_string(repo_root.join(relative)).map_err(|_| ())
+}
+
+fn check_python_syntax(repo_root: &Path, written: &[String]) -> Result<(), String> {
+    let py_files: Vec<&String> = written
+        .iter()
+        .filter(|file| file.ends_with(".py"))
+        .collect();
+    if py_files.is_empty() {
+        return Ok(());
+    }
+    let mut command = std::process::Command::new("python");
+    command.arg("-m").arg("py_compile");
+    for file in &py_files {
+        command.arg(repo_root.join(file));
+    }
+    command.current_dir(repo_root);
+    let output = match command.output() {
+        Ok(output) => output,
+        // Python unavailable: the check is best-effort; the test stage will
+        // surface syntax errors anyway.
+        Err(_) => return Ok(()),
+    };
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let first_error = stderr
+        .lines()
+        .find(|line| line.contains("Error") || line.contains("error"))
+        .unwrap_or("syntax error");
+    Err(format!(
+        "rejected: edited Python file(s) do not compile — {first_error}"
+    ))
 }
 
 fn tool_name(action: &str) -> &'static str {
@@ -354,6 +538,63 @@ mod tests {
         assert_eq!(ctx.run.tool_executions.len(), 2);
         assert_eq!(ctx.run.tool_executions[0].tool, tools::FILE_WRITE);
         assert!(ctx.run.total_cost_usd > 0.0);
+    }
+
+    #[test]
+    fn sanity_check_rejects_missing_local_module() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("package.json"), r#"{ "private": true }"#).unwrap();
+        std::fs::write(
+            repo.path().join("src/report.js"),
+            "const x = require('./pricing.js');
+",
+        )
+        .unwrap();
+        let changes = ImplementationChanges {
+            summary: "s".into(),
+            written_files: vec!["src/report.js".into()],
+            deleted_files: vec![],
+        };
+        let task = Task {
+            id: "t".into(),
+            description: "d".into(),
+            repo_root: repo.path().to_path_buf(),
+            created_at: chrono::Utc::now(),
+        };
+        let run = Run::starting(task.clone(), Config::default());
+        let mut ctx = RunContext::new(Config::default(), task, run);
+        let err = sanity_check(&mut ctx, &changes).unwrap_err();
+        assert!(err.contains("pricing.js"), "got: {err}");
+        assert!(ctx.artifact("edit.sanity_error").is_some());
+    }
+
+    #[test]
+    fn sanity_check_passes_when_modules_exist() {
+        let repo = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(repo.path().join("src")).unwrap();
+        std::fs::write(repo.path().join("package.json"), r#"{ "private": true }"#).unwrap();
+        std::fs::write(
+            repo.path().join("src/report.js"),
+            "const x = require('./pricing.js');
+",
+        )
+        .unwrap();
+        std::fs::write(repo.path().join("src/pricing.js"), "module.exports = {};").unwrap();
+        let changes = ImplementationChanges {
+            summary: "s".into(),
+            written_files: vec!["src/report.js".into(), "src/pricing.js".into()],
+            deleted_files: vec![],
+        };
+        let task = Task {
+            id: "t".into(),
+            description: "d".into(),
+            repo_root: repo.path().to_path_buf(),
+            created_at: chrono::Utc::now(),
+        };
+        let run = Run::starting(task.clone(), Config::default());
+        let mut ctx = RunContext::new(Config::default(), task, run);
+        assert!(sanity_check(&mut ctx, &changes).is_ok());
     }
 
     #[tokio::test]

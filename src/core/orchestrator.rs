@@ -61,11 +61,12 @@ const LOOP_REQUIRED: [StageName; 4] = [
 /// Artifacts scoped to a single iteration; cleared when a new one starts.
 ///  deliberately persists — the Improve stage in the next
 /// iteration must read the previous iteration's diagnosis.
-const ITERATION_ARTIFACTS: [&str; 4] = [
+const ITERATION_ARTIFACTS: [&str; 5] = [
     "tests.result",
     "tests.output",
     "implementation.changes",
     "improvement.changes",
+    "edit.sanity_error",
 ];
 
 pub struct Orchestrator {

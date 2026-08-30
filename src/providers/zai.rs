@@ -110,8 +110,9 @@ impl AgentProvider for ZaiProvider {
             }
 
             let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
-            // Free tier occasionally returns 429 (overloaded). Retry with a
-            // short bounded backoff instead of burning an orchestrator attempt.
+            // Free tier regularly returns 429 (overloaded). Retry with a
+            // bounded exponential backoff instead of burning an orchestrator
+            // attempt — 5s/15s/30s gives the quota time to recover.
             let mut attempt = 0u32;
             let response = loop {
                 attempt += 1;

@@ -67,8 +67,34 @@ accurate diagnosis (module `./pricing.js` is missing) but the free-tier model
 repeatedly produced an edit set that rewrote the importer without writing the
 module. Lesson (now in the changelog): the loop needs a **structural edit
 check** (every referenced local module must exist after applying edits) before
-spending an iteration on tests. That check is the first item on our roadmap —
-and it can only be discovered by an evaluation like this one.
+spending an iteration on tests.
+
+## Round 2 — closing the loop on the challenging case
+
+The challenging case produced a concrete fix, which the protocol then
+re-measured (baseline unchanged; ForgeMan gained one capability):
+
+| Fix | What it does |
+|---|---|
+| **Structural sanity check** | After applying edits, before spending a test iteration: node local imports must resolve to files that exist after the edit set; edited `.py` files must `py_compile`. Violations reject the edit set with a precise reason |
+| **Feedback injection** | The rejection reason is stored and appended to the retried stage's prompt, so the model sees exactly what was rejected and why |
+| **Prompt hardening** | Coder/improver: "edit existing files IN PLACE — do not split existing code into new files" |
+| **Longer 429 backoff** | 5s/15s/30s exponential wait in the provider (free tier was heavily overloaded during round 2) |
+
+Round 2 results (same protocol, fresh baselines):
+
+| Case | ForgeMan round 1 (final state) | ForgeMan round 2 (final state) |
+|---|---|---|
+| `flawed-js` | exhausted ×2; **tree unimportable** (0 tests could run) | exhausted, but **2/3 preserved — the sanity check rejected the broken edit sets** before they did damage; 3 of 6 failures were 429 storms |
+| `flawed-py` | exhausted 2/3 | exhausted; an edit introduced 1 runtime error (errors=1) and diagnose itself hit a 429 |
+| `flawed-api` | VERIFIED 5/5 | kept (not re-run) |
+
+**Takeaway:** the sanity check did exactly what it was built for — the
+catastrophic regression (unimportable tree) disappeared — but the free-tier
+model still could not produce a fully passing suite for the js/py cases, and
+persistent 429s consumed whole iterations. Reliability is currently bounded by
+the model tier, not by the loop; the loop's job — make every failure visible,
+bounded, and diagnosable — held in all cases.
 
 ## Reproduce
 

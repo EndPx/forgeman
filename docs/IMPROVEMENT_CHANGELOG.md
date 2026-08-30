@@ -111,6 +111,15 @@ built and measured; nothing on this page is aspirational.
 | Evidence | Run 4: 3× `model exhausted max_tokens on reasoning` → after fix, run 5 completed `verified`; drift reproduced in run 3 (`Cargo.toml` + tokio additions reverted after hardening) — commits `d443f3b`, `af13159` |
 | Decision / learning | Kept. Decode settings are part of the agent contract, not a detail |
 
+## Stage 11 — Structural sanity check (from the challenging case)
+
+| | |
+|---|---|
+| What | After applying edits (before any test iteration is spent): node local imports must resolve to files that exist in the tree; edited Python files must `py_compile`. Violations reject the edit set, store the reason as `edit.sanity_error`, and the retried stage's prompt injects that reason as feedback |
+| Why | The challenging eval case: the free-tier model twice split `report.js` into a module it never wrote — the tree became unimportable while iterations ran out |
+| Evidence | Round 1: final tree unimportable (0 tests could run). Round 2 (with the check): broken edit sets were rejected before damage; final state preserved 2/3 tests; `sanity_check_rejects_missing_local_module` / `sanity_check_passes_when_modules_exist` unit tests; commits after `d443f3b` |
+| Decision / learning | Kept. A 20-line static check buys what another model upgrade would cost — and its rejection reason doubles as the next prompt's context. Second lesson from the same round: free-tier 429 storms consume whole iterations, so the provider backoff grew to 5s/15s/30s |
+
 ## Removed experiments (and what they taught)
 
 | Experiment | Why removed | Lesson |

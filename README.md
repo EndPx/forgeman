@@ -60,14 +60,18 @@ naive one-shot prompt with edits applied by a 30-line script
 | Case | Baseline (best of attempts) | ForgeMan (best of 2 runs) |
 |---|---|---|
 | `flawed-api` (Rust — broken build + 2 failing tests) | 2/5, never passed | **5/5 — VERIFIED** |
-| `flawed-js` (Node — 1 failing test + O(n²)) | 2/3, never passed | exhausted ×2 (model split code into a module it never wrote) |
+| `flawed-js` (Node — 1 failing test + O(n²)) | 2/3, never passed | exhausted ×2; round 2 sanity check preserved the tree (see below) |
 | `flawed-py` (Python — 1 failing test + O(n²)) | 2/3, never passed | exhausted (no regression, no fix) |
 | **Cases solved** | **0 / 3** | **1 / 3** |
 
 ForgeMan wins the case that requires *diagnosis through cascading compile
 errors*; it also fails honestly when the free-tier model goes off the rails —
 and the failure is visible in the exit code, not hidden behind a confident
-"done". Full protocol, raw data, and the challenging-case analysis:
+"done". When the worst failure mode (the model splitting code into a module it
+never wrote) was observed, we added a **structural sanity check** that rejects
+such edit sets with feedback before tests are spent — and round 2 confirmed
+the catastrophic regression disappeared. Full protocol, raw data, round-2
+results, and the challenging-case analysis:
 **[docs/EVALUATION.md](docs/EVALUATION.md)** · evolution story:
 **[docs/IMPROVEMENT_CHANGELOG.md](docs/IMPROVEMENT_CHANGELOG.md)** · agent
 trajectories: **[docs/trajectories.md](docs/trajectories.md)**
