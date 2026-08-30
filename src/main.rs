@@ -2,6 +2,7 @@ mod agents;
 mod cli;
 mod config;
 mod core;
+mod dashboard;
 mod env;
 mod git;
 mod providers;
@@ -91,6 +92,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Command::Report { run_id } => cmd_report(&repo_root, run_id)?,
         Command::Diff { run_id, full } => cmd_diff(&repo_root, run_id, full)?,
         Command::History => cmd_history(&repo_root)?,
+        Command::Dashboard { port } => cmd_dashboard(&repo_root, port).await?,
     }
     Ok(())
 }
@@ -527,6 +529,32 @@ fn cmd_diff(repo_root: &Path, run_id: Option<String>, full: bool) -> Result<()> 
         }
     }
     Ok(())
+}
+
+/// `forgeman dashboard` — serve the embedded UI plus live run API.
+/// Runs until terminated; Ctrl+C takes the default console path.
+async fn cmd_dashboard(repo_root: &Path, port: u16) -> Result<()> {
+    let store = RunStore::new(repo_root);
+    let url = format!("http://127.0.0.1:{port}");
+
+    println!("FORGEMAN DASHBOARD");
+    println!("  URL     {url}");
+    println!("  Repo    {}", repo_root.display());
+    println!("  Ctrl+C to stop");
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/c", "start", "", &url])
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+
+    dashboard::serve(store, port)
+        .await
+        .map_err(|err| anyhow::anyhow!("dashboard server failed: {err}"))
 }
 
 /// `forgeman history` — every run and its checkpoints.

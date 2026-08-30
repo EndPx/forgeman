@@ -1,16 +1,44 @@
-import { loadEvents, loadRun, statusLabel, statusReason } from "@/lib/runs";
+"use client";
 
-export const dynamic = "force-dynamic";
+import { Suspense, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  loadEvents,
+  loadRun,
+  statusLabel,
+  statusReason,
+  Event,
+  Run,
+} from "@/lib/runs";
 
-export default async function RunPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
-  const { id } = await params;
-  const run = await loadRun(id);
+export default function RunPage() {
+  return (
+    <Suspense fallback={<main><div className="panel">Loading…</div></main>}>
+      <RunContent />
+    </Suspense>
+  );
+}
 
-  if (!run) {
+function RunContent() {
+  const params = useSearchParams();
+  const id = params.get("id") ?? "";
+  const [run, setRun] = useState<Run | null>(null);
+  const [events, setEvents] = useState<Event[]>([]);
+  const [missing, setMissing] = useState(false);
+
+  useEffect(() => {
+    if (!id) {
+      setMissing(true);
+      return;
+    }
+    loadRun(id).then((data) => {
+      if (data === null) setMissing(true);
+      else setRun(data);
+    });
+    loadEvents(id).then((data) => setEvents(data ?? []));
+  }, [id]);
+
+  if (missing) {
     return (
       <main>
         <div className="panel">
@@ -23,34 +51,26 @@ export default async function RunPage({
     );
   }
 
+  if (!run) {
+    return (
+      <main>
+        <div className="panel">Loading…</div>
+      </main>
+    );
+  }
+
   const badge = statusLabel(run.status);
   const reason = statusReason(run.status);
-  const events = await loadEvents(id);
-
   const firstTests = run.iterations?.find((it) => it.tests)?.tests;
   const lastTests = [...(run.iterations ?? [])]
     .reverse()
     .find((it) => it.tests)?.tests;
 
-  const stageLabel: Record<string, string> = {
-    inspect: "inspect",
-    analyze: "analyze",
-    plan: "plan",
-    implement: "implement",
-    test: "test",
-    diagnose: "diagnose",
-    improve: "improve",
-    verify: "verify",
-    report: "report",
-  };
-
   return (
     <main>
       <div className="panel">
         <h2>
-          <span className="badge {badge.tone}"></span>
-          <span className={`badge ${badge.tone}`}>{badge.text}</span>{" "}
-          {run.id}
+          <span className={`badge ${badge.tone}`}>{badge.text}</span> {run.id}
         </h2>
         <p>
           {run.task?.description}
@@ -110,8 +130,8 @@ export default async function RunPage({
               </div>
               {iteration.stage_results?.map((stageResult, key) => (
                 <div key={key} className="muted">
-                  {stageLabel[stageResult.stage] ?? stageResult.stage} [
-                  {stageResult.status}] {stageResult.detail}
+                  {stageResult.stage} [{stageResult.status}]{" "}
+                  {stageResult.detail}
                 </div>
               ))}
               {iteration.failures?.map((failure, key) => (

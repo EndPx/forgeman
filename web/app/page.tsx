@@ -1,30 +1,41 @@
+"use client";
+
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { listRuns, statusLabel, statusReason } from "@/lib/runs";
+import { listRuns, statusLabel, statusReason, Run } from "@/lib/runs";
 
-export const dynamic = "force-dynamic";
+export default function RunsPage() {
+  const [runs, setRuns] = useState<Run[] | null>(null);
+  const [offline, setOffline] = useState(false);
 
-function formatWhen(iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return date.toISOString().replace("T", " ").slice(0, 16) + " UTC";
-}
-
-export default async function RunsPage() {
-  const runs = await listRuns();
+  useEffect(() => {
+    listRuns().then((data) => {
+      if (data === null) {
+        setOffline(true);
+      } else {
+        setRuns(data);
+      }
+    });
+  }, []);
 
   return (
     <main>
       <div className="panel">
         <h2>Engineering Runs</h2>
-        {runs.length === 0 ? (
+        {offline ? (
+          <div className="empty">
+            Cannot reach the ForgeMan API.
+            <br />
+            Start it with <code>forgeman dashboard</code> inside your
+            repository.
+          </div>
+        ) : runs === null ? (
+          <div className="empty">Loading…</div>
+        ) : runs.length === 0 ? (
           <div className="empty">
             No runs yet. Start the loop:
             <br />
             <code>forgeman run &quot;Fix the authentication bug&quot;</code>
-            <br />
-            <br />
-            Run records appear under <code>.forgeman/runs/</code> and are read
-            live by this dashboard.
           </div>
         ) : (
           <table className="list">
@@ -45,7 +56,9 @@ export default async function RunsPage() {
                 return (
                   <tr key={run.id}>
                     <td>
-                      <Link href={`/run/${run.id}`}>{run.id}</Link>
+                      <Link href={`/run/?id=${encodeURIComponent(run.id)}`}>
+                        {run.id}
+                      </Link>
                     </td>
                     <td>{run.task?.description ?? "—"}</td>
                     <td>
@@ -65,4 +78,10 @@ export default async function RunsPage() {
       </div>
     </main>
   );
+}
+
+function formatWhen(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toISOString().replace("T", " ").slice(0, 16) + " UTC";
 }

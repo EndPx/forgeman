@@ -63,14 +63,20 @@ ForgeMan diagnose, fix, iterate, and verify.
 
 ## Web Dashboard
 
+The dashboard is **embedded in the binary** — no Node needed at runtime.
+
 ```bash
-cd web && npm install && npm run dev
-# open http://localhost:3000 — reads .forgeman/runs/ live
+# one command builds everything (dashboard + release binary):
+npm run build-all
+
+# then serve it from any repository that has ForgeMan runs:
+forgeman dashboard            # http://127.0.0.1:3777
 ```
 
 Shows every run: status, baseline vs final tests, iterations with git
 checkpoints, decision trace (evidence → root cause → next action → result),
-and the raw event log.
+and the raw event log. For UI development use `npm run dev --prefix web`
+(then `npm run build-web` to re-embed).
 
 ## Configuration (`.forgeman/config.toml`)
 
@@ -129,6 +135,6 @@ All phases complete:
 ## Build
 
 ```bash
-cargo build && cargo test   # core (63 tests)
-cd web && npm install && npm run build   # dashboard
+npm run build-all    # everything: dashboard + release binary (one command)
+cargo test           # core test suite
 ```

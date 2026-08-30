@@ -102,4 +102,11 @@ pub enum Command {
 
     /// List runs and their per-iteration git checkpoints.
     History,
+
+    /// Serve the embedded web dashboard for this repository.
+    Dashboard {
+        /// Port to listen on (default 3777).
+        #[arg(long, default_value_t = 3777)]
+        port: u16,
+    },
 }

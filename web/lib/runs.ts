@@ -1,9 +1,4 @@
-import fs from "fs/promises";
-import path from "path";
-
-/** The dashboard reads ForgeMan run records straight from disk. */
-const RUNS_DIR = path.join(process.cwd(), "..", ".forgeman", "runs");
-const EVENTS_TAIL = 120;
+/** Dashboard data — fetched live from the ForgeMan binary's API. */
 
 export type RunStatus = { status: string; reason?: string; iterations?: number };
 
@@ -59,54 +54,26 @@ export type Run = {
 
 export type Event = { timestamp: string; event: string } & Record<string, unknown>;
 
-async function readJson<T>(file: string): Promise<T | null> {
+async function getJson<T>(url: string): Promise<T | null> {
   try {
-    return JSON.parse(await fs.readFile(file, "utf8")) as T;
+    const response = await fetch(url, { cache: "no-store" });
+    if (!response.ok) return null;
+    return (await response.json()) as T;
   } catch {
     return null;
   }
 }
 
-export async function listRuns(): Promise<Run[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(RUNS_DIR);
-  } catch {
-    return [];
-  }
-  const runs = await Promise.all(
-    entries
-      .filter((entry) => entry.startsWith("run_"))
-      .sort()
-      .reverse()
-      .map(async (id) => readJson<Run>(path.join(RUNS_DIR, id, "run.json"))),
-  );
-  return runs.filter((run): run is Run => run !== null);
+export function listRuns(): Promise<Run[] | null> {
+  return getJson<Run[]>("/api/runs");
 }
 
-export async function loadRun(id: string): Promise<Run | null> {
-  if (!id.startsWith("run_")) return null;
-  return readJson<Run>(path.join(RUNS_DIR, id, "run.json"));
+export function loadRun(id: string): Promise<Run | null> {
+  return getJson<Run>(`/api/runs/${encodeURIComponent(id)}`);
 }
 
-export async function loadEvents(id: string): Promise<Event[]> {
-  try {
-    const raw = await fs.readFile(path.join(RUNS_DIR, id, "events.jsonl"), "utf8");
-    const events = raw
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => {
-        try {
-          return JSON.parse(line) as Event;
-        } catch {
-          return null;
-        }
-      })
-      .filter((event): event is Event => event !== null);
-    return events.slice(-EVENTS_TAIL);
-  } catch {
-    return [];
-  }
+export function loadEvents(id: string): Promise<Event[] | null> {
+  return getJson<Event[]>(`/api/runs/${encodeURIComponent(id)}/events`);
 }
 
 export function statusLabel(status: RunStatus): { text: string; tone: string } {

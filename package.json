@@ -1,0 +1,11 @@
+{
+  "name": "forgeman-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "One-command build for ForgeMan: CLI binary with the dashboard embedded.",
+  "scripts": {
+    "build-web": "npm install --prefix web && npm run build --prefix web && node scripts/copy-dashboard.js",
+    "build-all": "npm run build-web && cargo build --release",
+    "test-all": "npm run build-web && cargo test --release"
+  }
+}
