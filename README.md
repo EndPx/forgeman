@@ -1,140 +1,131 @@
-# ForgeMan
+<div align="center">
 
-> **Autonomous Software Engineering Agent** — *AI that engineers, not just codes.*
+# FORGEMAN
 
-ForgeMan is a closed-loop software engineering system. It receives a real engineering problem, understands the repository, builds an engineering plan, implements the solution, runs independent validation, diagnoses failures, iterates, and produces an evidence-backed report proving the solution actually works.
+**Autonomous Software Engineering Agent**
+*AI that engineers, not just codes.*
 
-**Core principle:** code generated ≠ problem solved. `VERIFIED` is only claimed when tests, benchmarks, and evaluators prove it.
+[![CI](https://github.com/EndPx/forgeman/actions/workflows/ci.yml/badge.svg)](https://github.com/EndPx/forgeman/actions/workflows/ci.yml)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Rust](https://img.shields.io/badge/Rust-1.85%2B-orange)
+![Cost per demo run](https://img.shields.io/badge/demo%20cost-%240.00-success)
 
-## Core Loop
+</div>
 
-```text
-UNDERSTAND → INSPECT → PLAN → IMPLEMENT → TEST → OBSERVE → DIAGNOSE
-    → (FAIL: IMPROVE / PASS: VERIFY) → REPORT
-```
+---
 
-Iteration 0 implements the plan. Iterations 1+ improve from the failure
-analyzer's root-cause diagnosis. Every iteration becomes a git checkpoint.
+ForgeMan is a **closed-loop software engineering system**. It takes a real engineering problem, understands the repository, builds a plan, implements the change, runs the project's own test suite, **diagnoses its own failures**, iterates until the evidence says the problem is solved — and proves it with git checkpoints, a decision trace, and an engineering report.
 
-## Quick Start
+> **Core principle:** code generated ≠ problem solved. `VERIFIED` is only claimed when tests prove it.
+
+## It in action
+
+| Terminal (real run) | Dashboard (embedded) |
+|---|---|
+| ![terminal](docs/screenshots/terminal-verified.png) | ![dashboard](docs/screenshots/dashboard-run-detail.png) |
+
+**What happened in that run** (100% real, on [`examples/flawed-api`](examples/flawed-api) — a repo with a deliberately broken build and two failing tests):
+
+| Metric | Result |
+|---|---|
+| Tests | **0 → 5/5 (+100%)** |
+| Iterations | 3 (implement → improve → improve) |
+| Git checkpoints | One per iteration, traceable with `forgeman diff` |
+| Root causes found | 2 compile errors, diagnosed with 100% confidence + fix suggestions |
+| LLM cost | **$0.00** (Z.AI glm-4.7-flash free tier) |
+
+## Quick start
 
 ```bash
-# 1. Build
-cargo build
+# build everything (dashboard + release binary) — one command:
+npm run build-all
 
-# 2. Configure (provider credentials live in .env — see .env.example)
-cp .env.example .env   # then add your ZAI_API_KEY
-forgeman init          # scaffolds .forgeman/config.toml
+# add your key (free at z.ai — each user brings their own)
+cp .env.example .env        # set ZAI_API_KEY=...
 
-# 3. Run the full engineering loop on a repository
-cd path/to/your/repo
-forgeman run "Fix the authentication expiration bug"
+# in ANY git repository with a test suite:
+cd ~/projects/my-repo
+forgeman init               # optional: scaffold .forgeman/config.toml
+forgeman run "Fix the authentication bug"
 
-# 4. Inspect the evidence
-forgeman report        # baseline vs final, failures, root causes, checkpoints
-forgeman diff          # what changed since baseline (git)
-forgeman history       # every run and its checkpoints
+# evidence:
+forgeman report             # baseline → final, root causes, checkpoints
+forgeman diff               # exactly what changed
+forgeman dashboard          # live UI at http://127.0.0.1:3777
 ```
 
-### Standalone commands
+Full guide: [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) · Demo: `bash scripts/demo.sh`
+
+## How it works
+
+```mermaid
+flowchart TD
+    A["Task"] --> B["Inspect<br/>repository profile"]
+    B --> C["Analyze<br/>task → problem definition"]
+    C --> D["Plan<br/>steps + validation criteria"]
+    D --> E["Implement<br/>audited file edits"]
+    E --> F["Test<br/>cargo / npm / pytest"]
+    F -->|fail| G["Diagnose<br/>root cause + confidence"]
+    G --> H["Improve<br/>fix from diagnosis"]
+    H --> F
+    F -->|pass| I["Verify<br/>evidence gate"]
+    I --> R["Report<br/>baseline vs final"]
+```
+
+The loop runs until **all tests pass with no critical regressions** (`VERIFIED`), or a bound is hit: `max_iterations`, wall-clock timeout, or token budget. Stage failures retry up to 3 times, then escalate honestly — ForgeMan never claims success it cannot prove.
+
+## Commands
 
 | Command | Purpose |
 |---|---|
-| `forgeman init` | Scaffold `.forgeman/config.toml` |
-| `forgeman inspect` | Repository intelligence profile (language, framework, deps, risk areas) |
-| `forgeman analyze "task"` | LLM task analysis against the repository |
-| `forgeman plan "task"` | LLM implementation plan (steps, validation criteria, rollback) |
 | `forgeman run "task"` / `solve` | The full engineering loop |
-| `forgeman test` | Run the repository's validation suite (cargo / npm / pytest) |
+| `forgeman inspect` | Repository intelligence profile |
+| `forgeman analyze` / `plan "task"` | LLM analysis / plan standalone |
+| `forgeman test` | Run the repo's validation suite |
 | `forgeman report` / `diff` / `history` | Evidence and reporting |
+| `forgeman dashboard` | Embedded web UI + live API |
+| `forgeman init` | Scaffold configuration |
 
-## Killer Demo (spec §42)
+## Design guarantees
 
-```bash
-bash scripts/demo.sh                       # init examples/flawed-api as a git repo
-cd examples/flawed-api
-forgeman run "Fix the API performance issue and make the failing tests pass"
-forgeman report && forgeman diff
-```
+- **Independent evaluation** — the diagnoser judges only from evidence; `VERIFIED` requires the verify gate to re-assert passing tests.
+- **Audited actions** — every file edit is path-confined to the repository and logged (`tool.started`/`tool.completed` + `ToolExecution` records).
+- **Reproducible** — every run snapshots its config, streams JSONL events, and creates a git checkpoint per iteration.
+- **Bounded by design** — iterations, retries, timeout, and cost are all capped. No infinite agent loops.
+- **Pluggable LLM** — Z.AI (default, free tier), Anthropic, and OpenAI behind one `AgentProvider` trait; the core hardcodes no vendor.
 
-`examples/flawed-api` is deliberately flawed: a full-scan-per-lookup (N+1)
-hot path, deep clones in the report path, and two broken tests. Watch
-ForgeMan diagnose, fix, iterate, and verify.
-
-## Web Dashboard
-
-The dashboard is **embedded in the binary** — no Node needed at runtime.
-
-```bash
-# one command builds everything (dashboard + release binary):
-npm run build-all
-
-# then serve it from any repository that has ForgeMan runs:
-forgeman dashboard            # http://127.0.0.1:3777
-```
-
-Shows every run: status, baseline vs final tests, iterations with git
-checkpoints, decision trace (evidence → root cause → next action → result),
-and the raw event log. For UI development use `npm run dev --prefix web`
-(then `npm run build-web` to re-embed).
-
-## Configuration (`.forgeman/config.toml`)
+## Configuration
 
 ```toml
 [agent]
 provider = "zai"          # zai | anthropic | openai
-model = "glm-4.7-flash"   # free Z.AI flash tier by default
+model = "glm-4.7-flash"
 
 [execution]
 max_iterations = 5
 timeout_minutes = 20
-max_stage_attempts = 3
 
 [sandbox]
-enabled = false            # true → Docker isolation (network none, 1g, 1 cpu, pids 128)
-network = "restricted"
+enabled = false           # true → Docker isolation (no network, 1 CPU, 1 GiB)
 
 [budget]
 max_cost_usd = 5.0
 ```
 
-Credentials are read from `.env` (`ZAI_API_KEY`, optional `ANTHROPIC_API_KEY`,
-`OPENAI_API_KEY`). `.env` is gitignored and must never be committed.
+Credentials live in `.env` (gitignored): `ZAI_API_KEY`, optional `ANTHROPIC_API_KEY` / `OPENAI_API_KEY`.
 
-## Architecture
+## Repository map
 
-See [docs/architecture.md](docs/architecture.md). Highlights:
-
-- **Stage contract** — every loop step is a `Stage` producing artifacts into
-  `RunContext` (`repository.profile`, `task.analysis`, `plan`,
-  `tests.result`, `failure.analysis`, …).
-- **Independent evaluation** — the diagnoser judges only from evidence; the
-  verifier asserts the stop condition; `VERIFIED` requires passing tests.
-- **Audited tools** — file edits are path-confined to the repository and
-  logged (`tool.started`/`tool.completed` + `ToolExecution` records).
-- **Reproducibility** — config snapshot + event JSONL + git checkpoints per
-  iteration under `.forgeman/runs/<run_id>/`.
-
-## Status
-
-All phases complete:
-
-- [x] Phase 1 — CLI + core orchestration engine
-- [x] Phase 2 — Repository inspector
-- [x] Phase 3 — LLM provider abstraction (Z.AI / Anthropic / OpenAI)
-- [x] Phase 4 — Analyzer + Planner (LLM-backed)
-- [x] Phase 5 — Audited tool layer + Coder stage
-- [x] Phase 6 — Test Runner (cargo / npm / pytest)
-- [x] Phase 7 — Failure Analyzer (independent root-cause diagnosis)
-- [x] Phase 8 — Iterative Improvement Engine + Verify gate
-- [x] Phase 9 — Git checkpoints, diff/history, engineering report
-- [x] Phase 10 — Sandbox (Docker isolation with resource limits)
-- [x] Phase 11 — Web dashboard
-- [x] Phase 12 — Demo scenario + documentation
-
-## Build
-
-```bash
-npm run build-all    # everything: dashboard + release binary (one command)
-cargo test           # core test suite
+```text
+src/           CLI, core loop, providers, tools, sandbox, git, dashboard
+agents/        inspect · analyze · plan · coder · test_runner · diagnose · improve · verify
+web/           Next.js dashboard (exported and embedded into the binary)
+examples/      flawed-api — the killer-demo repository
+docs/          architecture, getting started
 ```
+
+See [docs/architecture.md](docs/architecture.md) for the full design, or jump straight to [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
+## License
+
+[MIT](LICENSE)

@@ -66,7 +66,7 @@ export default function RunsPage() {
                         {badge.text}
                       </span>
                     </td>
-                    <td>{run.iterations?.length ?? 0}</td>
+                    <td>{run.iterations?.length ?? run.iterations_count ?? 0}{run.current_stage ? <span className="muted"> · {run.current_stage}…</span> : null}</td>
                     <td>${(run.total_cost_usd ?? 0).toFixed(4)}</td>
                     <td className="muted">{formatWhen(run.started_at)}</td>
                   </tr>

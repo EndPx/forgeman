@@ -50,6 +50,9 @@ export type Run = {
   total_cost_usd: number;
   tool_executions?: ToolExecution[];
   baseline_commit?: string | null;
+  /** Present on in-progress runs read from the live event log. */
+  iterations_count?: number;
+  current_stage?: string;
 };
 
 export type Event = { timestamp: string; event: string } & Record<string, unknown>;

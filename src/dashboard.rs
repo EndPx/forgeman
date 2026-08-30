@@ -39,11 +39,20 @@ pub fn handle(store: &RunStore, path: &str) -> (u16, &'static str, Vec<u8>) {
         return handle_api(store, api_path);
     }
 
-    let asset_path = if path == "/" || path.is_empty() {
+    // Routes without a file extension may be SPA routes (`/run`); remember
+    // that before mapping them onto `.html` asset names.
+    let looks_like_route = !path.contains('.');
+    let trimmed = path.trim_start_matches('/').trim_end_matches('/');
+    let mut asset_path = if trimmed.is_empty() {
         INDEX_HTML.to_string()
     } else {
-        path.trim_start_matches('/').to_string()
+        trimmed.to_string()
     };
+
+    // Static export (trailingSlash=false) maps `/run` and `/run/` to run.html.
+    if !asset_path.contains('.') {
+        asset_path.push_str(".html");
+    }
 
     if let Some(file) = Assets::get(&asset_path) {
         let mut data = file.data.to_vec();
@@ -54,9 +63,7 @@ pub fn handle(store: &RunStore, path: &str) -> (u16, &'static str, Vec<u8>) {
     }
 
     // SPA fallback: unknown extension-less routes go to the app shell.
-    if !asset_path.contains('.')
-        && let Some(file) = Assets::get(INDEX_HTML)
-    {
+    if looks_like_route && let Some(file) = Assets::get(INDEX_HTML) {
         return (200, content_type(INDEX_HTML), file.data.to_vec());
     }
 
@@ -83,7 +90,7 @@ fn handle_api(store: &RunStore, api_path: &str) -> (u16, &'static str, Vec<u8>) 
 
     match segments.as_slice() {
         ["runs"] => {
-            let mut runs = Vec::new();
+            let mut runs: Vec<serde_json::Value> = Vec::new();
             if let Ok(ids) = store.list_run_ids() {
                 for id in ids {
                     if let Ok(run) = store.load_run(&id)
@@ -93,6 +100,18 @@ fn handle_api(store: &RunStore, api_path: &str) -> (u16, &'static str, Vec<u8>) 
                     }
                 }
             }
+            // In-progress runs have no run.json yet — synthesize them from
+            // the streamed event log so the dashboard can watch live.
+            runs.extend(in_progress_runs(store));
+            runs.sort_by(|a, b| {
+                let id_of = |r: &serde_json::Value| {
+                    r.get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+                id_of(b).cmp(&id_of(a))
+            });
             let body = serde_json::to_vec(&runs).unwrap_or_else(|_| b"[]".to_vec());
             (200, content, body)
         }
@@ -134,6 +153,78 @@ fn valid_run_id(id: &str) -> bool {
         && id.len() <= 64
 }
 
+/// Build partial run records for runs that are still executing (events.jsonl
+/// exists, run.json not yet written) so the dashboard can watch live.
+fn in_progress_runs(store: &RunStore) -> Vec<serde_json::Value> {
+    let mut runs = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&store.root) else {
+        return runs;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let id = entry.file_name().to_string_lossy().to_string();
+        if !valid_run_id(&id) || dir.join("run.json").exists() {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(dir.join("events.jsonl")) else {
+            continue;
+        };
+
+        let mut description = String::new();
+        let mut started_at = String::new();
+        let mut iterations_count = 0usize;
+        let mut last_stage = String::new();
+        for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            match value.get("event").and_then(|event| event.as_str()) {
+                Some("task.created") => {
+                    description = value
+                        .get("description")
+                        .and_then(|d| d.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                }
+                Some("iteration.started") => {
+                    iterations_count = value
+                        .get("index")
+                        .and_then(|index| index.as_u64())
+                        .unwrap_or(0) as usize
+                        + 1;
+                }
+                Some("stage.started") => {
+                    last_stage = value
+                        .get("stage")
+                        .and_then(|stage| stage.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                }
+                _ => {}
+            }
+            if started_at.is_empty() {
+                started_at = value
+                    .get("timestamp")
+                    .and_then(|timestamp| timestamp.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+            }
+        }
+
+        runs.push(json!({
+            "id": id,
+            "task": { "description": description },
+            "started_at": started_at,
+            "status": { "status": "running" },
+            "iterations": [],
+            "iterations_count": iterations_count,
+            "current_stage": last_stage,
+            "total_cost_usd": 0.0,
+        }));
+    }
+    runs
+}
+
 fn error_body(message: &str) -> Vec<u8> {
     serde_json::to_vec(&json!({ "error": message })).unwrap_or_else(|_| b"{}".to_vec())
 }
@@ -172,7 +263,7 @@ pub async fn serve(store: RunStore, port: u16) -> std::io::Result<()> {
                 "Error"
             };
             let head = format!(
-                "HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                "HTTP/1.1 {status} {reason}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\ncache-control: no-store\r\nconnection: close\r\n\r\n",
                 body.len()
             );
             use tokio::io::AsyncWriteExt;
