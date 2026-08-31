@@ -49,6 +49,8 @@ export type Run = {
   status: RunStatus;
   iterations: Iteration[];
   total_cost_usd: number;
+  tokens_in?: number;
+  tokens_out?: number;
   tool_executions?: ToolExecution[];
   baseline_commit?: string | null;
   /** Present on in-progress runs read from the live event log. */

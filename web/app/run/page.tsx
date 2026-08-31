@@ -101,8 +101,22 @@ function RunContent() {
             <div className="value">{run.tool_executions?.length ?? 0}</div>
           </div>
           <div className="metric">
+            <div className="label">Tokens</div>
+            <div className="value">
+              {run.tokens_in || run.tokens_out
+                ? `${run.tokens_in ?? 0} / ${run.tokens_out ?? 0}`
+                : "—"}
+            </div>
+          </div>
+          <div className="metric">
             <div className="label">Cost</div>
-            <div className="value">${(run.total_cost_usd ?? 0).toFixed(4)}</div>
+            <div className="value">
+              {run.total_cost_usd
+                ? `$${run.total_cost_usd.toFixed(4)}`
+                : run.tokens_out
+                  ? "free"
+                  : "—"}
+            </div>
           </div>
           {run.baseline_commit ? (
             <div className="metric">

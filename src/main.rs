@@ -373,6 +373,18 @@ fn print_run_summary(run: &Run, store: &RunStore) {
     if failures > 0 {
         println!("FAILURES     {failures}");
     }
+    println!(
+        "TOKENS       {} in / {} out{}",
+        run.tokens_in,
+        run.tokens_out,
+        if run.total_cost_usd > 0.0 {
+            format!(" (${:.4})", run.total_cost_usd)
+        } else if run.tokens_out > 0 {
+            " (free tier)".to_string()
+        } else {
+            String::new()
+        }
+    );
     println!("DURATION     {}s", run.duration_secs());
     println!("EVIDENCE     {}", store.events_path(&run.id).display());
     println!();

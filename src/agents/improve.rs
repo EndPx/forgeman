@@ -126,7 +126,11 @@ impl Stage for ImproveStage {
             let (output, response) = produce_edits(self.provider.as_ref(), IMPROVE_SYSTEM, user)
                 .await
                 .map_err(|err| StageError::failed(StageName::Improve, err))?;
-            ctx.run.total_cost_usd += response.cost_usd;
+            ctx.run.add_usage(
+                response.input_tokens,
+                response.output_tokens,
+                response.cost_usd,
+            );
 
             let changes: ImplementationChanges = apply_edits(ctx, &output)?;
             super::coder::sanity_check(ctx, &changes)

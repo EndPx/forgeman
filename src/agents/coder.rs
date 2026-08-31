@@ -202,7 +202,11 @@ impl Stage for CoderStage {
             )
             .await
             .map_err(|err| StageError::failed(StageName::Implement, err))?;
-            ctx.run.total_cost_usd += response.cost_usd;
+            ctx.run.add_usage(
+                response.input_tokens,
+                response.output_tokens,
+                response.cost_usd,
+            );
 
             let changes = apply_edits(ctx, &output)?;
             sanity_check(ctx, &changes)

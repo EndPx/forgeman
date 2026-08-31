@@ -101,10 +101,30 @@ pub fn estimate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 
         (0.15, 0.6)
     } else if model.contains("gpt-4o") || model.contains("gpt-4.1") {
         (2.5, 10.0)
+    } else if model.contains("glm") && model.contains("flash") {
+        // Z.AI flash tier is free.
+        (0.0, 0.0)
+    } else if model.contains("glm") {
+        // Z.AI paid GLM models (approximate list pricing).
+        (0.6, 2.2)
     } else {
         (0.0, 0.0)
     };
     input_tokens as f64 / 1e6 * in_rate + output_tokens as f64 / 1e6 * out_rate
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn glm_flash_is_free_but_paid_glm_is_priced() {
+        assert_eq!(estimate_cost("glm-4.7-flash", 1_000_000, 1_000_000), 0.0);
+        let paid = estimate_cost("glm-4.6", 1_000_000, 1_000_000);
+        assert!((paid - 2.8).abs() < 1e-9, "got {paid}");
+        let sonnet = estimate_cost("claude-sonnet-4", 1_000_000, 0);
+        assert!((sonnet - 3.0).abs() < 1e-9);
+    }
 }
 
 /// Resolve the API key: `agent.api_key_env` (custom env var name) wins,

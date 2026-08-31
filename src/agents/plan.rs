@@ -95,7 +95,11 @@ impl Stage for PlanStage {
             )
             .await
             .map_err(|err| StageError::failed(StageName::Plan, err))?;
-            ctx.run.total_cost_usd += response.cost_usd;
+            ctx.run.add_usage(
+                response.input_tokens,
+                response.output_tokens,
+                response.cost_usd,
+            );
 
             let detail = format!(
                 "{} step(s): {} [{} tok]",

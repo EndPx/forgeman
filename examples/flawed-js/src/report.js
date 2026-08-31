@@ -7,7 +7,8 @@
 
 function discount(price, pct) {
   // BUG: adds the discount instead of subtracting it.
-  return price + (price * pct) / 100;
+  // FIXED: subtract the percentage to apply the discount.
+  return price - (price * pct) / 100;
 }
 
 function uniqueNames(names) {

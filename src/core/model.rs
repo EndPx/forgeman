@@ -122,6 +122,11 @@ pub struct Run {
     /// HEAD at run start — baseline for diffs and improvement stats (§22).
     #[serde(default)]
     pub baseline_commit: Option<String>,
+    /// Accumulated LLM token usage across all stages.
+    #[serde(default)]
+    pub tokens_in: u64,
+    #[serde(default)]
+    pub tokens_out: u64,
 }
 
 /// Audit record for one tool invocation (file write, shell command, …).
@@ -150,7 +155,16 @@ impl Run {
             total_cost_usd: 0.0,
             tool_executions: Vec::new(),
             baseline_commit: None,
+            tokens_in: 0,
+            tokens_out: 0,
         }
+    }
+
+    /// Fold one provider response into the run's cost and token totals.
+    pub fn add_usage(&mut self, input_tokens: u64, output_tokens: u64, cost_usd: f64) {
+        self.tokens_in += input_tokens;
+        self.tokens_out += output_tokens;
+        self.total_cost_usd += cost_usd;
     }
 
     pub fn duration_secs(&self) -> u64 {

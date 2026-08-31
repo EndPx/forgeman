@@ -99,7 +99,11 @@ impl Stage for AnalyzeStage {
             )
             .await
             .map_err(|err| StageError::failed(StageName::Analyze, err))?;
-            ctx.run.total_cost_usd += response.cost_usd;
+            ctx.run.add_usage(
+                response.input_tokens,
+                response.output_tokens,
+                response.cost_usd,
+            );
 
             let detail = format!(
                 "goal: {} ({} component(s), {} risk(s)) [{} tok]",

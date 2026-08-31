@@ -132,7 +132,11 @@ impl Stage for DiagnoseStage {
             )
             .await
             .map_err(|err| StageError::failed(StageName::Diagnose, err))?;
-            ctx.run.total_cost_usd += response.cost_usd;
+            ctx.run.add_usage(
+                response.input_tokens,
+                response.output_tokens,
+                response.cost_usd,
+            );
 
             // Attach the diagnosis to the current iteration's failure record
             // so the improver (and the report) can trace it.
