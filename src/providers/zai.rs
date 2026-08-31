@@ -56,8 +56,7 @@ impl ZaiProvider {
         config: &AgentConfig,
         upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
-        let api_key = std::env::var("ZAI_API_KEY")
-            .ok()
+        let api_key = super::resolve_api_key(config, "ZAI_API_KEY")
             .or_else(|| std::env::var("Z_AI_API_KEY").ok());
         Self::new(
             api_key,

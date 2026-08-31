@@ -64,7 +64,7 @@ impl AnthropicProvider {
         upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self::new(
-            std::env::var("ANTHROPIC_API_KEY").ok(),
+            super::resolve_api_key(config, "ANTHROPIC_API_KEY"),
             config.model.clone(),
             config
                 .base_url

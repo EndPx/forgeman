@@ -64,7 +64,7 @@ impl OpenAiProvider {
         upgrade: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self::new(
-            std::env::var("OPENAI_API_KEY").ok(),
+            super::resolve_api_key(config, "OPENAI_API_KEY"),
             config.model.clone(),
             config
                 .base_url

@@ -107,6 +107,17 @@ pub fn estimate_cost(model: &str, input_tokens: u64, output_tokens: u64) -> f64 
     input_tokens as f64 / 1e6 * in_rate + output_tokens as f64 / 1e6 * out_rate
 }
 
+/// Resolve the API key: `agent.api_key_env` (custom env var name) wins,
+/// otherwise fall back to the provider's conventional variable.
+pub fn resolve_api_key(config: &AgentConfig, default_env: &str) -> Option<String> {
+    if let Some(name) = &config.api_key_env {
+        return std::env::var(name)
+            .ok()
+            .or_else(|| std::env::var(default_env).ok());
+    }
+    std::env::var(default_env).ok()
+}
+
 /// Provider plus the shared upgrade flag the orchestrator can set to switch
 /// a tiered provider to its fallback model mid-run.
 pub struct ProviderHandle {

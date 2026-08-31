@@ -37,6 +37,10 @@ pub struct AgentConfig {
     /// Optional stronger model the coder/improver upgrades to when the first
     /// iteration fails to verify (model tiering, spec §13).
     pub fallback_model: Option<String>,
+    /// Name of the environment variable holding the API key — lets any
+    /// OpenAI-compatible endpoint (OpenRouter, Groq, DeepSeek, …) be used
+    /// without code changes. Defaults are per provider (ZAI_API_KEY, …).
+    pub api_key_env: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -98,6 +102,7 @@ impl Default for AgentConfig {
             // Optional stronger model the coder/improver upgrades to when the
             // first iteration fails to verify (tiered fallback, spec §13).
             fallback_model: None,
+            api_key_env: None,
         }
     }
 }
@@ -141,6 +146,28 @@ impl Default for BudgetConfig {
     }
 }
 
+impl AgentConfig {
+    /// Environment overrides (set via `.env` or the shell) win over the
+    /// config file so one `.env` can re-point ForgeMan at any endpoint.
+    pub fn apply_env_overrides(&mut self, get: &dyn Fn(&str) -> Option<String>) {
+        if let Some(value) = get("FORGEMAN_PROVIDER") {
+            self.provider = value;
+        }
+        if let Some(value) = get("FORGEMAN_MODEL") {
+            self.model = value;
+        }
+        if let Some(value) = get("FORGEMAN_FALLBACK_MODEL") {
+            self.fallback_model = Some(value);
+        }
+        if let Some(value) = get("FORGEMAN_BASE_URL") {
+            self.base_url = Some(value);
+        }
+        if let Some(value) = get("FORGEMAN_API_KEY_ENV") {
+            self.api_key_env = Some(value);
+        }
+    }
+}
+
 impl Config {
     /// Load configuration for the target repository.
     ///
@@ -155,13 +182,20 @@ impl Config {
         };
 
         if explicit.is_none() && !path.exists() {
-            return Ok(Self::default());
+            let mut config = Self::default();
+            config
+                .agent
+                .apply_env_overrides(&|key| std::env::var(key).ok());
+            return Ok(config);
         }
 
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read config file {}", path.display()))?;
-        let config: Self = toml::from_str(&raw)
+        let mut config: Self = toml::from_str(&raw)
             .with_context(|| format!("invalid config file {}", path.display()))?;
+        config
+            .agent
+            .apply_env_overrides(&|key| std::env::var(key).ok());
         config.validate()?;
         Ok(config)
     }
@@ -252,6 +286,38 @@ mod tests {
         assert_eq!(config.execution.max_iterations, 2);
         assert_eq!(config.execution.timeout_minutes, 20);
         assert_eq!(config.budget.max_cost_usd, 5.0);
+    }
+
+    #[test]
+    fn env_overrides_win_over_config() {
+        let mut config = Config::default();
+        config.agent.provider = "openai".to_string();
+        config.agent.model = "gpt-4o".to_string();
+        let values = [
+            ("FORGEMAN_PROVIDER", "zai"),
+            ("FORGEMAN_MODEL", "glm-4.7-flash"),
+            ("FORGEMAN_BASE_URL", "https://api.example.test/v4"),
+            ("FORGEMAN_API_KEY_ENV", "OPENROUTER_API_KEY"),
+        ];
+        let get = |key: &str| -> Option<String> {
+            values
+                .iter()
+                .find(|(name, _)| *name == key)
+                .map(|(_, value)| value.to_string())
+        };
+        config.agent.apply_env_overrides(&get);
+        assert_eq!(config.agent.provider, "zai");
+        assert_eq!(config.agent.model, "glm-4.7-flash");
+        assert_eq!(
+            config.agent.base_url.as_deref(),
+            Some("https://api.example.test/v4")
+        );
+        assert_eq!(
+            config.agent.api_key_env.as_deref(),
+            Some("OPENROUTER_API_KEY")
+        );
+        // Unset vars leave the config value untouched.
+        assert!(config.agent.fallback_model.is_none());
     }
 
     #[test]

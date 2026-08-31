@@ -49,7 +49,28 @@ cp .env.example .env
 Every user brings **their own key** — ForgeMan never ships or commits keys.
 `.env` is gitignored; verify with `git status` (it must not appear).
 If you run ForgeMan in a different repository, copy the `.env` there too —
-it is loaded from the current working directory.
+it is loaded from the current working directory (and from the target repo
+root), or set `ZAI_API_KEY` as a system environment variable once.
+
+### Any endpoint, any format
+
+`agent.provider` selects the **wire API format** (`openai` = OpenAI-compatible
+chat completions, `anthropic` = Messages API), so ForgeMan works with almost
+any endpoint. Everything can also be driven from `.env` alone — env vars win
+over `forgeman.toml`:
+
+```bash
+# example: OpenRouter instead of Z.AI
+FORGEMAN_PROVIDER=openai
+FORGEMAN_MODEL=deepseek/deepseek-chat
+FORGEMAN_BASE_URL=https://openrouter.ai/api/v1
+FORGEMAN_API_KEY_ENV=OPENROUTER_API_KEY
+OPENROUTER_API_KEY=sk-or-...
+```
+
+Available overrides: `FORGEMAN_PROVIDER`, `FORGEMAN_MODEL`,
+`FORGEMAN_FALLBACK_MODEL`, `FORGEMAN_BASE_URL`, `FORGEMAN_API_KEY_ENV` —
+see `.env.example` for the full list.
 
 ## 4. First run
 
