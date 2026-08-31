@@ -78,9 +78,16 @@ trajectories: **[docs/trajectories.md](docs/trajectories.md)**
 
 ## Quick start
 
+**Judges / first-time users — no toolchain needed:** grab a prebuilt binary
+from [Releases](https://github.com/EndPx/forgeman/releases), extract it, put
+your free `ZAI_API_KEY` in a `.env` next to it, and run
+`.\forgeman.exe run "..."`. Full walk-through:
+[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).
+
 ```bash
-# build everything (dashboard + release binary) — one command:
+# building from source — one command (dashboard + release binary):
 npm run build-all
+cargo install --path .      # puts the `forgeman` command on your PATH
 
 # add your key (free at z.ai — each user brings their own)
 cp .env.example .env        # set ZAI_API_KEY=...

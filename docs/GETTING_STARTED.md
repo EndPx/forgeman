@@ -6,23 +6,37 @@ From zero to your first verified engineering run in ~10 minutes.
 
 | Tool | Needed for | Check |
 |---|---|---|
-| [Rust 1.85+](https://rustup.rs) | building the binary | `cargo --version` |
-| [Node.js 18+](https://nodejs.org) | building the dashboard (dev-time only) | `node --version` |
-| [Git](https://git-scm.com) | checkpoints & diffs | `git --version` |
 | A free [Z.AI API key](https://z.ai) | the LLM | — |
+| [Git](https://git-scm.com) | checkpoints & diffs | `git --version` |
+| [Rust 1.85+](https://rustup.rs) | only if building from source | `cargo --version` |
+| [Node.js 18+](https://nodejs.org) | only if building the dashboard yourself | `node --version` |
 | [Docker](https://docker.com) *(optional)* | sandboxed execution | `docker info` |
 
-## 2. Build (one command)
+## 2. Install
+
+### Option A — prebuilt binary (no toolchain needed)
+
+1. Grab the archive for your platform from
+   [GitHub Releases](https://github.com/EndPx/forgeman/releases) and extract it
+   (`forgeman.exe` on Windows).
+2. Run it from that folder (`.\forgeman.exe --version` on PowerShell) or copy
+   it into any folder that is on your `PATH`.
+
+### Option B — build from source
 
 ```bash
 git clone https://github.com/EndPx/forgeman
 cd forgeman
-npm run build-all
+npm run build-all          # builds dashboard + release binary in one command
+cargo install --path .     # copies the binary onto your PATH
 ```
 
-This builds the web dashboard, embeds it into the binary, and compiles
-`target/release/forgeman(.exe)`. Put that file on your `PATH`, or use
-`cargo install --path .`.
+The `cargo install --path .` step is what makes the bare `forgeman` command
+work everywhere — without it, call the binary directly with
+`.\target\release\forgeman.exe` (PowerShell) or
+`./target/release/forgeman` (bash).
+
+**Verify:** `forgeman --version` prints `forgeman 0.1.0`.
 
 ## 3. Add your API key
 
@@ -34,6 +48,8 @@ cp .env.example .env
 
 Every user brings **their own key** — ForgeMan never ships or commits keys.
 `.env` is gitignored; verify with `git status` (it must not appear).
+If you run ForgeMan in a different repository, copy the `.env` there too —
+it is loaded from the current working directory.
 
 ## 4. First run
 
